@@ -1,4 +1,4 @@
-FROM node:25-slim AS builder
+FROM node:26-slim AS builder
 
 WORKDIR /app
 
@@ -11,7 +11,7 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN pnpm build
 
-FROM node:25-slim
+FROM node:26-slim
 
 WORKDIR /app
 
