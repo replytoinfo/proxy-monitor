@@ -1,47 +1,49 @@
+**English** · [Русский](README.ru.md)
+
 # proxy-monitor
 
-Мониторинг HTTP и SOCKS5 прокси с управлением и алертами через Telegram. Работает 24/7, тратит меньше килобайта трафика на проверку.
+Monitoring for HTTP and SOCKS5 proxies, managed and alerted through Telegram. Runs 24/7 and spends under a kilobyte of traffic per check.
 
-## Что делает
+## What it does
 
-- **Проверяет доступность.** Открывает через прокси настоящее соединение и запрашивает `HEAD`. Рукопожатия недостаточно: прокси, принимающая логин, но не пропускающая трафик, должна считаться мёртвой.
-- **Подтверждает отказ запасным адресом.** Прокси объявляется `down` только после провала основного и запасного адреса. По умолчанию это Cloudflare и Google: разные компании, общий отказ маловероятен. Запасная проверка идёт только после провала основной, так что здоровые прокси лишнего трафика не получают.
-- **Следит за ротацией IP.** Для мобильных прокси: если внешний IP не менялся дольше `ROTATION_MAX_AGE`, приходит алерт. Эхо-сервисов несколько, перебор идёт до первого успеха.
-- **Не молчит о собственных сбоях.** Провал IP-пробы приходит отдельным алертом. Внешний watchdog (healthchecks.io) подтверждает, что процесс жив.
-- **Схлопывает шквал.** При одновременном падении всех прокси уходит одно сообщение вместо N.
+- **Checks liveness.** Opens a real connection through the proxy and issues a `HEAD` request. A handshake proves nothing: a proxy that accepts your login but won't pass traffic must count as dead.
+- **Confirms failure with a backup target.** A proxy is marked `down` only after both the primary and the fallback address fail. The defaults are Cloudflare and Google, so a simultaneous outage is unlikely. The fallback check runs only after the primary fails, which keeps healthy proxies free of extra traffic.
+- **Watches IP rotation.** For mobile proxies: if the external IP hasn't changed within `ROTATION_MAX_AGE`, an alert goes out. Several echo services are tried in order until one answers.
+- **Reports its own failures.** A failed IP probe raises its own alert instead of silence. An external watchdog (healthchecks.io) confirms the process is alive.
+- **Collapses alert storms.** When every proxy goes down at once, one message goes out instead of N.
 
-## Telegram-бот
+## Telegram bot
 
-| Команда | Действие |
-|---------|----------|
-| `/add` | добавить прокси (`host:port:user:pass` или URL) |
-| `/list` | список с состоянием |
-| `/status` | сводка по мониторингу |
-| `/ip` | текущие внешние IP и возраст ротации |
-| `/label`, `/group` | метка и группа для прокси |
-| `/pause`, `/resume` | приостановить или вернуть проверки |
-| `/del` | удалить |
+| Command | Action |
+|---------|--------|
+| `/add` | add a proxy (`host:port:user:pass` or a URL) |
+| `/list` | list proxies with their state |
+| `/status` | monitoring summary |
+| `/ip` | current external IPs and rotation age |
+| `/label`, `/group` | set a label or group |
+| `/pause`, `/resume` | suspend or resume checks |
+| `/del` | remove a proxy |
 
-## Безопасность
+## Security
 
-Пароли прокси хранятся зашифрованными (AES-256-GCM, ключ в `ENCRYPTION_KEY`). Пароли не попадают в текст ошибок, `HEALTHCHECK_URL` не логируется никогда, потому что содержит секрет. Проверяемые адреса проходят через политику `net-policy.ts`: обращения в приватные диапазоны блокируются, если явно не разрешены через `ALLOW_PRIVATE_TARGETS`.
+Proxy passwords are stored encrypted (AES-256-GCM, key in `ENCRYPTION_KEY`). Passwords never reach error text, and `HEALTHCHECK_URL` is never logged because it carries a secret. Target addresses go through `net-policy.ts`: requests into private ranges are blocked unless `ALLOW_PRIVATE_TARGETS` says otherwise.
 
-## Стек
+## Stack
 
 TypeScript (ESM, NodeNext) · Node ≥20 · pnpm · better-sqlite3 · `socks` · vitest
 
-Зависимостей в проде две: `better-sqlite3` и `socks`. Всё остальное — стандартная библиотека Node.
+Two production dependencies: `better-sqlite3` and `socks`. Everything else is the Node standard library.
 
-## Запуск
+## Running it
 
 ```bash
 pnpm install
-cp .env.example .env    # заполнить TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ENCRYPTION_KEY
+cp .env.example .env    # fill in TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ENCRYPTION_KEY
 pnpm build
 pnpm start
 ```
 
-Ключ шифрования генерируется так:
+Generate the encryption key with:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
@@ -54,9 +56,9 @@ docker build -t proxy-monitor .
 docker run -d --env-file .env -v $(pwd)/data:/app/data proxy-monitor
 ```
 
-База SQLite лежит в `data/`, том нужно примонтировать, иначе история проверок теряется при перезапуске.
+The SQLite database lives in `data/`. Mount that volume, otherwise check history disappears on restart.
 
-## Разработка
+## Development
 
 ```bash
 pnpm dev     # tsx watch
@@ -65,13 +67,15 @@ pnpm build   # tsc
 pnpm audit --prod
 ```
 
-Тесты не ходят в реальную сеть и не зависят от реального времени: поднимают локальные серверы на порту `0` и разгоняют очередь микрозадач вручную.
+Tests never touch the real network and never depend on wall-clock time: they start local servers on port `0` and drain the microtask queue by hand.
 
-## Документация
+## Docs
 
-- [docs/CHANGELOG.md](docs/CHANGELOG.md): история изменений
-- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md): известные проблемы и решения
+- [docs/CHANGELOG.md](docs/CHANGELOG.md): change history
+- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md): known issues and fixes
 
-## Лицензия
+Both are written in Russian.
 
-MIT. См. [LICENSE](LICENSE).
+## License
+
+MIT. See [LICENSE](LICENSE).
