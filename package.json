@@ -21,7 +21,7 @@
     ]
   },
   "dependencies": {
-    "better-sqlite3": "^12.10.0",
+    "better-sqlite3": "^13.0.3",
     "socks": "^2.8.9"
   },
   "devDependencies": {
