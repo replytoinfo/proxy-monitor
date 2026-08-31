@@ -65,7 +65,7 @@ async function checkProxy(proxy: ProxyRow, primary: URL, fallback: URL | null) {
   const result = await checkWithFallback(proxy, primary, fallback);
 
   const status = result.ok ? "up" : "down";
-  saveCheck(proxy.id, status, result.responseTime, result.error ?? null);
+  saveCheck(proxy.id, status, result.responseTime, result.error ?? null, result.usedFallback);
 
   return { proxy, status, usedFallback: result.usedFallback };
 }
@@ -480,7 +480,7 @@ export function startMonitor() {
 
   cleanupTimer = setInterval(() => {
     try {
-      const result = deleteOldChecks(24);
+      const result = deleteOldChecks(config.CHECKS_RETENTION_HOURS);
       if (result.changes > 0) {
         console.log(`[monitor] Cleaned up ${result.changes} old checks`);
       }

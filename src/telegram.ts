@@ -11,9 +11,12 @@ import {
   getIpState,
   countIpChanges,
   fromSqlTime,
+  getQualityAll,
+  getChecksSpanHours,
   type ProxyRow,
 } from "./db.js";
 import { hasStrayCredentialText, parseProxyList } from "./parser.js";
+import { qualityIcon, formatQualityTail, formatWindow } from "./quality-format.js";
 
 const API = `https://api.telegram.org/bot${config.TELEGRAM_BOT_TOKEN}`;
 const MAX_MESSAGE_TEXT = 4096;
@@ -234,7 +237,7 @@ export function formatIpProbeSystemOkAlert(okCount: number, total: number): stri
 
 // --- Command handlers ---
 
-function formatProxyStatus(p: ProxyRow): string {
+function formatProxyStatus(p: ProxyRow, quality?: number): string {
   const lastCheck = getLastCheck(p.id);
   const failCount = getConsecutiveFailCount(p.id, config.FAIL_THRESHOLD);
 
@@ -261,7 +264,7 @@ function formatProxyStatus(p: ProxyRow): string {
   const safeType = escapeHtml(p.type.toUpperCase());
   const labelStr = p.label ? ` ${escapeHtml(p.label)}` : "";
 
-  return `${statusIcon} <b>#${p.id}</b>${labelStr} <code>${safeHost}:${p.port}</code> ${safeType}${auth}${enabled} — ${statusText}`;
+  return `${statusIcon} <b>#${p.id}</b>${labelStr} <code>${safeHost}:${p.port}</code> ${safeType}${auth}${enabled} — ${statusText}${formatQualityTail(quality)}`;
 }
 
 async function handleCommand(
@@ -289,6 +292,7 @@ async function handleCommand(
         "/pause <i>id</i> — пауза",
         "/resume <i>id</i> — продолжить",
         "/status — сводка",
+        "/quality — качество за неделю",
         "",
         "<i>Форматы: ip:port, socks5://ip:port, user:pass@ip:port</i>",
       ].join("\n"),
@@ -315,6 +319,10 @@ async function handleCommand(
       return;
     }
 
+    const quality = new Map(
+      getQualityAll(config.CHECKS_RETENTION_HOURS).map((q) => [q.proxy_id, q.quality])
+    );
+
     const groups = new Map<string, ProxyRow[]>();
     const ungrouped: ProxyRow[] = [];
 
@@ -331,11 +339,11 @@ async function handleCommand(
     const lines: string[] = [];
     for (const [name, items] of groups) {
       lines.push(`\n\u{1F4C1} <b>${escapeHtml(name)}</b>`);
-      for (const p of items) lines.push(formatProxyStatus(p));
+      for (const p of items) lines.push(formatProxyStatus(p, quality.get(p.id)));
     }
     if (ungrouped.length > 0) {
       if (groups.size > 0) lines.push(`\n\u{1F4C1} <b>Без группы</b>`);
-      for (const p of ungrouped) lines.push(formatProxyStatus(p));
+      for (const p of ungrouped) lines.push(formatProxyStatus(p, quality.get(p.id)));
     }
 
     await sendMessage(lines.join("\n").trim(), chatId);
@@ -409,6 +417,41 @@ async function handleCommand(
       ].join("\n"),
       chatId
     );
+    return;
+  }
+
+  if (trimmed === "/quality") {
+    const rows = getQualityAll(config.CHECKS_RETENTION_HOURS);
+
+    if (rows.length === 0) {
+      await sendMessage("Пока нет проверок — качество считать не из чего.", chatId);
+      return;
+    }
+
+    const byId = new Map(getProxies().map((p) => [p.id, p]));
+    const span = getChecksSpanHours(config.CHECKS_RETENTION_HOURS);
+    const lines = [`<b>Качество ${formatWindow(span)}</b>`, ""];
+
+    // Худшие сверху: показатель нужен, чтобы замечать проблемные, а не любоваться здоровыми.
+    for (const q of [...rows].sort((a, b) => a.quality - b.quality)) {
+      const p = byId.get(q.proxy_id);
+      if (!p) continue;
+
+      const name = p.label ?? p.group_name ?? `${p.host}:${p.port}`;
+      const pct = q.quality === 100 ? "100" : Math.min(99, Math.round(q.quality));
+      lines.push(
+        `${qualityIcon(q.quality)} <b>#${p.id}</b> ${escapeHtml(name)} — ${pct}%`
+      );
+
+      const parts = [`${q.total} проверок`, `сбоев ${q.bad}`];
+      // Разбивка нужна, только когда есть что разбивать: при нулевом fallback
+      // она повторяла бы число сбоев ещё дважды.
+      if (q.fallback > 0) parts.push(`DOWN ${q.down} · fallback ${q.fallback}`);
+      if (q.medianMs !== null) parts.push(`медиана ${q.medianMs}ms`);
+      lines.push(`   <i>${parts.join(" · ")}</i>`);
+    }
+
+    await sendMessage(lines.join("\n"), chatId);
     return;
   }
 

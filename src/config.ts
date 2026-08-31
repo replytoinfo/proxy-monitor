@@ -118,6 +118,8 @@ export const config = {
   MAX_PROXIES: envInt("MAX_PROXIES", 100, 1),
   MAX_ADD_BODY_BYTES: envInt("MAX_ADD_BODY_BYTES", 10_000, 100),
   MAX_CONCURRENT_CHECKS: envInt("MAX_CONCURRENT_CHECKS", 10, 1),
+  /** Глубина истории проверок. Она же окно показателя quality. */
+  CHECKS_RETENTION_HOURS: envInt("CHECKS_RETENTION_HOURS", 168, 1),
   ALLOW_PRIVATE_TARGETS: envBool("ALLOW_PRIVATE_TARGETS", false),
   ENCRYPTION_KEY: process.env.ENCRYPTION_KEY ?? "",
   REMINDER_INTERVAL: envInt("REMINDER_INTERVAL", 12, 0) * 3_600_000,

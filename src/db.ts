@@ -97,6 +97,15 @@ try {
   // Column already exists
 }
 
+// Migration: remember whether the check fell back to the backup target.
+// Записи, сделанные до этой миграции, получают 0 — доля fallback за первое
+// окно после обновления будет занижена, дальше выровняется.
+try {
+  db.exec(`ALTER TABLE checks ADD COLUMN used_fallback INTEGER NOT NULL DEFAULT 0`);
+} catch {
+  // Column already exists
+}
+
 // --- Encrypt existing plaintext passwords if encryption is now enabled ---
 
 function migrateCredentials() {
@@ -145,6 +154,8 @@ export interface CheckRow {
   response_time: number | null;
   error: string | null;
   checked_at: string;
+  /** 1, если успех получен только через запасной адрес. */
+  used_fallback: number;
 }
 
 export interface AlertRow {
@@ -251,7 +262,7 @@ export function setGroup(id: number, groupName: string | null) {
 // --- Checks ---
 
 const stmtSaveCheck = db.prepare(
-  `INSERT INTO checks (proxy_id, status, response_time, error) VALUES (?, ?, ?, ?)`
+  `INSERT INTO checks (proxy_id, status, response_time, error, used_fallback) VALUES (?, ?, ?, ?, ?)`
 );
 
 const stmtRecentChecks = db.prepare(
@@ -272,9 +283,87 @@ export function saveCheck(
   proxyId: number,
   status: "up" | "down",
   responseTime: number | null,
-  error: string | null
+  error: string | null,
+  usedFallback = false
 ) {
-  return stmtSaveCheck.run(proxyId, status, responseTime, error);
+  return stmtSaveCheck.run(proxyId, status, responseTime, error, usedFallback ? 1 : 0);
+}
+
+export interface QualityRow {
+  proxy_id: number;
+  total: number;
+  down: number;
+  fallback: number;
+  /** Проверок со сбоем; down и fallback на одной проверке считаются один раз. */
+  bad: number;
+  /** Доля проверок без сбоев, в процентах. Сбой — down либо уход в fallback. */
+  quality: number;
+  /** Медиана отклика; null, если ни у одной проверки нет времени. */
+  medianMs: number | null;
+}
+
+const stmtQuality = db.prepare(
+  `SELECT proxy_id,
+          COUNT(*) AS total,
+          SUM(CASE WHEN status != 'up' THEN 1 ELSE 0 END) AS down,
+          SUM(CASE WHEN used_fallback = 1 THEN 1 ELSE 0 END) AS fallback,
+          SUM(CASE WHEN status != 'up' OR used_fallback = 1 THEN 1 ELSE 0 END) AS bad
+   FROM checks
+   WHERE checked_at > datetime('now', ? || ' hours')
+   GROUP BY proxy_id`
+);
+
+/**
+ * Медиана отклика по каждой прокси. Отдельный запрос с оконной функцией:
+ * агрегатной медианы в SQLite нет, а тянуть все отклики в память нельзя —
+ * за неделю это сотня тысяч строк. При чётном числе проверок берётся
+ * верхняя из двух средних: усреднять смысла нет, это не денежная величина.
+ */
+const stmtMedian = db.prepare(
+  `SELECT proxy_id, response_time AS median FROM (
+     SELECT proxy_id, response_time,
+            ROW_NUMBER() OVER (PARTITION BY proxy_id ORDER BY response_time) AS rn,
+            COUNT(*) OVER (PARTITION BY proxy_id) AS cnt
+     FROM checks
+     WHERE checked_at > datetime('now', ? || ' hours') AND response_time IS NOT NULL
+   ) WHERE rn = cnt / 2 + 1`
+);
+
+/**
+ * Качество каждой прокси за окно — одним запросом на всех, чтобы /list
+ * не превращался в N запросов по числу прокси.
+ *
+ * Сбоем считается и down, и успех через запасной адрес: прокси, которая
+ * доходит только через fallback, исправно показывает `up`, но теряет
+ * каждый n-й запрос — без этого такая деградация остаётся невидимой.
+ */
+const stmtSpan = db.prepare(
+  `SELECT CAST((julianday('now') - julianday(MIN(checked_at))) * 24 AS INTEGER) AS hours
+   FROM checks WHERE checked_at > datetime('now', ? || ' hours')`
+);
+
+/**
+ * Сколько часов истории реально накоплено, но не больше окна. Нужно, чтобы
+ * /quality не обещал неделю, когда база живёт вторые сутки.
+ */
+export function getChecksSpanHours(windowHours: number): number {
+  const row = stmtSpan.get(`-${windowHours}`) as { hours: number | null };
+  return Math.min(windowHours, row.hours ?? 0);
+}
+
+export function getQualityAll(hours: number): QualityRow[] {
+  const rows = stmtQuality.all(`-${hours}`) as Array<Omit<QualityRow, "quality" | "medianMs">>;
+
+  const medians = new Map<number, number>();
+  for (const m of stmtMedian.all(`-${hours}`) as Array<{ proxy_id: number; median: number }>) {
+    medians.set(m.proxy_id, m.median);
+  }
+
+  return rows.map((r) => ({
+    ...r,
+    quality: r.total === 0 ? 0 : ((r.total - r.bad) / r.total) * 100,
+    medianMs: medians.get(r.proxy_id) ?? null,
+  }));
 }
 
 export function getRecentChecks(proxyId: number, limit = 10): CheckRow[] {

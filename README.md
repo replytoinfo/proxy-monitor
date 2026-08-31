@@ -19,6 +19,7 @@ Monitoring for HTTP and SOCKS5 proxies, managed and alerted through Telegram. Ru
 | `/add` | add a proxy (`host:port:user:pass` or a URL) |
 | `/list` | list proxies with their state |
 | `/status` | monitoring summary |
+| `/quality` | quality over the retention window |
 | `/ip` | current external IPs and rotation age |
 | `/label`, `/group` | set a label or group |
 | `/pause`, `/resume` | suspend or resume checks |

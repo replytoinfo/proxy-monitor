@@ -91,6 +91,34 @@ describe("runChecks overlap guard", () => {
     expect(liveness.checkWithFallback).toHaveBeenCalledTimes(2);
   });
 
+  it("помечает запись, когда проверка прошла только через запасной адрес", async () => {
+    vi.mocked(liveness.checkWithFallback).mockResolvedValue({
+      ok: true,
+      responseTime: 10400,
+      usedFallback: true,
+    });
+
+    await monitor.runChecks();
+
+    const proxy = db.getProxies()[0];
+    const last = db.getLastCheck(proxy.id)!;
+    expect(last.status).toBe("up");
+    expect(last.used_fallback).toBe(1);
+  });
+
+  it("не помечает запись, когда хватило основного адреса", async () => {
+    vi.mocked(liveness.checkWithFallback).mockResolvedValue({
+      ok: true,
+      responseTime: 250,
+      usedFallback: false,
+    });
+
+    await monitor.runChecks();
+
+    const proxy = db.getProxies()[0];
+    expect(db.getLastCheck(proxy.id)!.used_fallback).toBe(0);
+  });
+
   it("records the fallback error text in the check row", async () => {
     vi.mocked(liveness.checkWithFallback).mockResolvedValue({
       ok: false,
