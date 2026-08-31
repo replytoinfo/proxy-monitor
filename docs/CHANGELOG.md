@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.0] — 2026-08-31
+
+### Added
+- **Sentry — только отчёты об ошибках.** Необработанные исключения уходили в `/root/.pm2/logs/proxy-monitor-error.log`, куда никто не смотрит: падения better-sqlite3, ошибки Telegram API и срывы парсера `/add` были видны только постфактум. Инициализация вынесена в `src/instrument.ts` и подключается флагом `--import` до остальных модулей — SDK v10 иначе не успевает встать раньше инструментируемого кода. Взят `initWithoutDefaultIntegrations` с `getDefaultIntegrationsWithoutPerformance()` и `registerEsmLoaderHooks: false`: трейсинг здесь не нужен, а его ESM-хуки (`import-in-the-middle`) стоят десятки мегабайт на сервере с 961 МБ RAM. Отказы прокси в Sentry намеренно не идут — это штатный результат проверки, он живёт в базе и в Telegram-алертах, а в Sentry дал бы только шум и расход квоты. Пустой `SENTRY_DSN` — SDK не поднимается.
+- **`Sentry.flush(2000)` в graceful shutdown** — `shutdown` вызывал `process.exit(0)` синхронно, и событие, случившееся за секунду до рестарта, терялось.
+
+### Changed
+- **Прод переехал с Hetzner на VDSina (Амстердам).** Причина — вопрос о соответствии AUP Hetzner; формально мониторинг под запрет «scanning of foreign networks or foreign IP addresses» не подпадал (фиксированный авторизованный список, не перебор), решение о переезде принято отдельно. Все 8 прокси проверены пробой с обоих адресов до переключения — IP-whitelist переезду не помешал.
+
 ## [1.2.3] — 2026-08-20
 
 ### Security

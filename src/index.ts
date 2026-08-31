@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/node";
 import { startMonitor, stopMonitor } from "./monitor.js";
 import { startPolling, stopPolling } from "./telegram.js";
 
@@ -7,10 +8,11 @@ startMonitor();
 startPolling();
 
 // Graceful shutdown
-const shutdown = () => {
+const shutdown = async () => {
   console.log("[proxy-monitor] Shutting down...");
   stopMonitor();
   stopPolling();
+  await Sentry.flush(2000);
   process.exit(0);
 };
 
