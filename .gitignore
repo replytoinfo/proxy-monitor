@@ -3,7 +3,10 @@ dist/
 data/*.db
 data/*.db-wal
 data/*.db-shm
+# бэкапы базы и окружения: .env.bak-* содержит рабочие токены
+data/*.bak*
 .env
+.env.bak*
 *.log
 .DS_Store
 .claude/
