@@ -17,6 +17,8 @@ import {
 } from "./db.js";
 import { hasStrayCredentialText, parseProxyList } from "./parser.js";
 import { qualityIcon, formatQualityTail, formatWindow } from "./quality-format.js";
+import { measureSpeed, SPEED_DEADLINE_MS } from "./checker/speed.js";
+import { selectSpeedTargets, isSpeedRunning, runSpeed } from "./speed-command.js";
 
 const API = `https://api.telegram.org/bot${config.TELEGRAM_BOT_TOKEN}`;
 const MAX_MESSAGE_TEXT = 4096;
@@ -24,15 +26,8 @@ const MAX_MESSAGE_TEXT = 4096;
 let offset = 0;
 let polling = false;
 
-// --- HTML escaping ---
-
-export function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
+export { escapeHtml } from "./html.js";
+import { escapeHtml } from "./html.js";
 
 // --- Send messages ---
 
@@ -293,6 +288,7 @@ async function handleCommand(
         "/resume <i>id</i> — продолжить",
         "/status — сводка",
         "/quality — качество за неделю",
+        "/speed [id|группа] — замер скорости",
         "",
         "<i>Форматы: ip:port, socks5://ip:port, user:pass@ip:port</i>",
       ].join("\n"),
@@ -452,6 +448,40 @@ async function handleCommand(
     }
 
     await sendMessage(lines.join("\n"), chatId);
+    return;
+  }
+
+  if (trimmed === "/speed" || trimmed.startsWith("/speed ")) {
+    const arg = trimmed.replace(/^\/speed\s*/, "");
+    const { targets, error } = selectSpeedTargets(arg, getProxies());
+    if (error) {
+      await sendMessage(error, chatId);
+      return;
+    }
+    if (targets.length === 0) {
+      await sendMessage("Нет активных прокси. Используй /add чтобы добавить.", chatId);
+      return;
+    }
+    if (isSpeedRunning()) {
+      await sendMessage("Замер уже идёт — дождись результатов.", chatId);
+      return;
+    }
+
+    const worstCase = Math.ceil((targets.length * SPEED_DEADLINE_MS) / 1000);
+    await sendMessage(
+      `Измеряю ${targets.length} прокси, это займёт до ${worstCase} с…`,
+      chatId
+    );
+
+    // Фоном: getUpdates ждёт завершения обработчика, а прогон длится минуты.
+    const url = new URL(config.SPEED_URL);
+    void runSpeed(
+      targets,
+      (p) => measureSpeed(p, url),
+      (text) => sendMessage(text, chatId)
+    ).catch((err) =>
+      console.error("[speed] run failed:", err instanceof Error ? err.message : err)
+    );
     return;
   }
 
@@ -656,6 +686,8 @@ async function setBotCommands() {
     { command: "list", description: "Список прокси со статусами" },
     { command: "ip", description: "Текущие IP и ротация" },
     { command: "status", description: "Сводка" },
+    { command: "quality", description: "Качество за неделю" },
+    { command: "speed", description: "Замер скорости скачивания" },
     { command: "add", description: "Добавить прокси [в группу]" },
     { command: "label", description: "Псевдоним для прокси" },
     { command: "group", description: "Сменить группу прокси" },

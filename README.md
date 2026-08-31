@@ -20,6 +20,7 @@ Monitoring for HTTP and SOCKS5 proxies, managed and alerted through Telegram. Ru
 | `/list` | list proxies with their state |
 | `/status` | monitoring summary |
 | `/quality` | quality over the retention window |
+| `/speed [id\|group]` | on-demand download speed test |
 | `/ip` | current external IPs and rotation age |
 | `/label`, `/group` | set a label or group |
 | `/pause`, `/resume` | suspend or resume checks |

@@ -9,6 +9,8 @@ let validateCheckUrl: (raw: string) => URL | null;
 let validateWatchdogUrl: (raw: string) => URL | null;
 let parseEchoUrls: (raw: string) => string[];
 let optionalFallbackUrl: (raw: string) => string | null;
+let resolveSpeedUrl: (raw: string | undefined) => string;
+let SPEED_URL_DEFAULT: string;
 
 beforeAll(async () => {
   const mod = await import("../config.js");
@@ -17,6 +19,8 @@ beforeAll(async () => {
   validateWatchdogUrl = mod.validateWatchdogUrl;
   parseEchoUrls = mod.parseEchoUrls;
   optionalFallbackUrl = mod.optionalFallbackUrl;
+  resolveSpeedUrl = mod.resolveSpeedUrl;
+  SPEED_URL_DEFAULT = mod.SPEED_URL_DEFAULT;
 });
 
 describe("resolveRotationMaxAge", () => {
@@ -108,5 +112,20 @@ describe("optionalFallbackUrl", () => {
     expect(optionalFallbackUrl("http://gstatic.com/generate_204")).toBe(
       "http://gstatic.com/generate_204"
     );
+  });
+});
+
+describe("resolveSpeedUrl", () => {
+  it("keeps a valid http url", () => {
+    expect(resolveSpeedUrl("http://files.example/1mb.bin")).toBe("http://files.example/1mb.bin");
+  });
+
+  it("falls back to the default when unset", () => {
+    expect(resolveSpeedUrl(undefined)).toBe(SPEED_URL_DEFAULT);
+  });
+
+  it("falls back to the default on https or garbage", () => {
+    expect(resolveSpeedUrl("https://files.example/1mb.bin")).toBe(SPEED_URL_DEFAULT);
+    expect(resolveSpeedUrl("not a url")).toBe(SPEED_URL_DEFAULT);
   });
 });

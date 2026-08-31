@@ -99,6 +99,19 @@ export function optionalFallbackUrl(raw: string): string | null {
   return url.href;
 }
 
+export const SPEED_URL_DEFAULT = "http://speed.cloudflare.com/__down?bytes=1048576";
+
+/** Файл для /speed. Дефолт отдаёт ровно 1 МБ с Content-Length по чистому http. */
+export function resolveSpeedUrl(raw: string | undefined): string {
+  if (!raw) return SPEED_URL_DEFAULT;
+  const url = validateCheckUrl(raw);
+  if (!url) {
+    console.warn(`[config] SPEED_URL is not a valid http: URL — using default`);
+    return SPEED_URL_DEFAULT;
+  }
+  return url.href;
+}
+
 function optionalWatchdogUrl(raw: string | undefined): string | null {
   if (!raw) return null;
   const url = validateWatchdogUrl(raw);
@@ -138,5 +151,6 @@ export const config = {
     process.env.CHECK_URL_FALLBACK ?? "http://www.gstatic.com/generate_204"
   ),
   IP_PROBE_FAIL_THRESHOLD: envInt("IP_PROBE_FAIL_THRESHOLD", 3, 1),
+  SPEED_URL: resolveSpeedUrl(process.env.SPEED_URL),
   HEALTHCHECK_URL: optionalWatchdogUrl(process.env.HEALTHCHECK_URL),
 } as const;
