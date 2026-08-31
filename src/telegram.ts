@@ -12,6 +12,7 @@ import {
   countIpChanges,
   fromSqlTime,
   getQualityAll,
+  decryptProxy,
   getChecksSpanHours,
   type ProxyRow,
 } from "./db.js";
@@ -477,7 +478,7 @@ async function handleCommand(
     const url = new URL(config.SPEED_URL);
     void runSpeed(
       targets,
-      (p) => measureSpeed(p, url),
+      (p) => measureSpeed(decryptProxy(p), url),
       (text) => sendMessage(text, chatId)
     ).catch((err) =>
       console.error("[speed] run failed:", err instanceof Error ? err.message : err)

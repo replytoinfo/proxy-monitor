@@ -229,15 +229,16 @@ export function getProxyById(id: number): ProxyRow | undefined {
   return stmtGetProxy.get(id) as ProxyRow | undefined;
 }
 
+/** Пароль в базе зашифрован; сетевым проверкам нужен открытый. */
+export function decryptProxy(p: ProxyRow): ProxyRow {
+  return { ...p, password: p.password ? decrypt(p.password) : null };
+}
+
 /**
  * Get enabled proxies with decrypted passwords for network checks.
  */
 export function getEnabledProxies(): ProxyRow[] {
-  const rows = stmtGetEnabled.all() as ProxyRow[];
-  return rows.map((r) => ({
-    ...r,
-    password: r.password ? decrypt(r.password) : null,
-  }));
+  return (stmtGetEnabled.all() as ProxyRow[]).map(decryptProxy);
 }
 
 export function deleteProxy(id: number) {
