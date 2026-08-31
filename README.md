@@ -49,7 +49,21 @@ Generate the encryption key with:
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-Docker:
+### Production (PM2)
+
+This is how it actually runs in production. `--import` loads Sentry before the rest of the modules — the SDK has to be up before the code it reports on. `--enable-source-maps` makes stack traces point at `src/*.ts` instead of compiled `dist/*.js`.
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build
+pm2 start bash --name proxy-monitor -- \
+  -c 'node --env-file=.env --enable-source-maps --import ./dist/instrument.js dist/index.js'
+pm2 save && pm2 startup
+```
+
+Changing the launch command means `pm2 delete` and `pm2 start` again — `pm2 restart` will not pick up new arguments.
+
+### Docker (alternative)
 
 ```bash
 docker build -t proxy-monitor .
@@ -57,6 +71,10 @@ docker run -d --env-file .env -v $(pwd)/data:/app/data proxy-monitor
 ```
 
 The SQLite database lives in `data/`. Mount that volume, otherwise check history disappears on restart.
+
+### Error reporting (optional)
+
+Set `SENTRY_DSN` and unhandled exceptions go to Sentry — errors only, no tracing, no performance integrations. Proxy failures are deliberately not sent: they are a normal check result and live in the database and in Telegram alerts. Leave it empty and the SDK never starts.
 
 ## Development
 

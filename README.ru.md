@@ -49,7 +49,21 @@ pnpm start
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-Docker:
+### Прод (PM2)
+
+Так он и работает на проде. `--import` поднимает Sentry раньше остальных модулей — SDK должен встать до кода, о котором отчитывается. `--enable-source-maps` разворачивает стектрейсы на `src/*.ts` вместо скомпилированного `dist/*.js`.
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build
+pm2 start bash --name proxy-monitor -- \
+  -c 'node --env-file=.env --enable-source-maps --import ./dist/instrument.js dist/index.js'
+pm2 save && pm2 startup
+```
+
+Меняешь команду запуска — только `pm2 delete` и `pm2 start` заново: `pm2 restart` новые аргументы не подхватывает.
+
+### Docker (альтернатива)
 
 ```bash
 docker build -t proxy-monitor .
@@ -57,6 +71,10 @@ docker run -d --env-file .env -v $(pwd)/data:/app/data proxy-monitor
 ```
 
 База SQLite лежит в `data/`, том нужно примонтировать, иначе история проверок теряется при перезапуске.
+
+### Отчёты об ошибках (опционально)
+
+Задать `SENTRY_DSN` — необработанные исключения уходят в Sentry: только ошибки, без трейсинга и performance-интеграций. Отказы прокси туда намеренно не шлются: это штатный результат проверки, он живёт в базе и в Telegram-алертах. Пусто — SDK не поднимается.
 
 ## Разработка
 

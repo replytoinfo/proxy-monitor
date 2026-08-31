@@ -4,14 +4,16 @@
 
 **Симптом:** логи содержат `attempt to write a readonly database`, пинг в `/list` не обновляется.
 
-**Причина:** volume с данными смонтирован с правами, не совпадающими с пользователем процесса.
+**Причина:** у процесса нет прав на запись в файл базы или в каталог `data/` (SQLite в режиме WAL пишет ещё `-wal` и `-shm` рядом, поэтому каталог тоже должен быть доступен на запись).
 
-**Решение:**
-1. Проверить, что `entrypoint.sh` присутствует и выполняет `chown -R node:node /app/data`
-2. Проверить, что Dockerfile использует `ENTRYPOINT ["/entrypoint.sh"]` вместо `USER node` + `CMD`
-3. Передеплоить
+**Решение (PM2, так работает прод):**
+1. `ls -la data/` — владелец файлов должен совпадать с пользователем процесса PM2 (`pm2 describe proxy-monitor` → поле `user`)
+2. `chown -R <user>:<user> data/` при расхождении
+3. `pm2 restart proxy-monitor`
 
-**Проверка:** `docker logs --tail 30 <container>` — не должно быть ошибок `SQLITE_READONLY`.
+**Решение (Docker):** `entrypoint.sh` должен выполнять `chown -R node:node /app/data`, а Dockerfile — использовать `ENTRYPOINT ["/entrypoint.sh"]` вместо `USER node` + `CMD`.
+
+**Проверка:** `pm2 logs proxy-monitor --lines 30 --nostream` — не должно быть ошибок `SQLITE_READONLY`.
 
 ## Процесс падает каждый час
 
@@ -24,8 +26,9 @@
 ## Бот не отвечает на команды
 
 **Проверить:**
-1. `TELEGRAM_BOT_TOKEN` и `TELEGRAM_CHAT_ID` заданы в окружении контейнера
-2. `docker logs <container>` — ищи `[telegram] API error` или `Polling error`
+1. `TELEGRAM_BOT_TOKEN` и `TELEGRAM_CHAT_ID` заданы в `.env` (в зависимостях нет `dotenv` — окружение подаётся только флагом `--env-file=.env`)
+2. `pm2 logs proxy-monitor --lines 30 --nostream` — ищи `[telegram] API error` или `Polling error`
+3. Запущена ровно одна копия бота: два polling-клиента одного токена дают `409 Conflict`, и отвечать перестают оба
 3. Бот не заблокирован в чате
 
 ## Прокси всегда показываются как DOWN
@@ -52,7 +55,7 @@
 
 **Возможные причины:**
 - Все адреса в `IP_ECHO_URL` невалидны или список пуст (`https:` не поддерживается — только `http:`). Невалидные элементы отбрасываются поштучно с предупреждением при старте; когда не остаётся ни одного валидного адреса, в логах появится: `[monitor] IP rotation checks disabled — no valid IP_ECHO_URL`. Монитор доступности при этом продолжает работать.
-- Из контейнера не достучаться до эхо-сервиса. Проверить: `docker exec <container> curl http://api.ipify.org`.
+- С сервера не достучаться до эхо-сервиса. Проверить: `curl http://api.ipify.org`.
 
 ## Расход трафика от IP-проверок
 
@@ -103,10 +106,24 @@
 
 До 1.2.2 бюджет пробы делился между эхо-адресами и при двух адресах составлял 5 секунд — меньше холодной задержки. Начиная с 1.2.2 попытка получает 10 секунд, как и liveness. Если алерты идут и после обновления, прокси действительно отвечает дольше 10 секунд — смотреть надо на неё, а не на монитор.
 
-## Volume потерян после редеплоя
+## Бэкап и перенос базы
 
-База живёт в `/app/data` внутри контейнера — без примонтированного тома она исчезает вместе с ним. Бэкап:
+База живёт в `data/proxy-monitor.db`. В режиме WAL свежие записи лежат в `-wal`, который бывает больше самой базы, поэтому **копировать надо все три файла** и только при остановленном процессе:
 
 ```bash
-docker exec <container> cat /app/data/proxy-monitor.db > backup.db
+pm2 stop proxy-monitor
+cd data && tar cf - proxy-monitor.db proxy-monitor.db-wal proxy-monitor.db-shm | ssh <host> 'cd /path/data && tar xf -'
+pm2 start proxy-monitor
 ```
+
+Для быстрого бэкапа перед деплоем хватает `cp data/proxy-monitor.db data/proxy-monitor.db.bak-$(date +%F)`.
+
+В Docker-варианте база лежит в `/app/data` внутри контейнера и без примонтированного тома исчезает вместе с ним.
+
+## Где смотреть ошибки
+
+Необработанные исключения уходят в Sentry, если задан `SENTRY_DSN` (уровень `fatal`, окружение из `NODE_ENV`, релиз — версия из `package.json`). Стектрейсы указывают на `src/*.ts`, потому что процесс запускается с `--enable-source-maps`, а `tsc` собирает с `sourceMap: true`.
+
+Без Sentry остаётся `pm2 logs proxy-monitor --err --lines 50 --nostream`.
+
+Отказы прокси в Sentry намеренно не попадают — это штатный результат проверки, он в таблице `checks` и в Telegram-алертах.

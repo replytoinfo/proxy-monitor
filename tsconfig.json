@@ -6,6 +6,7 @@
     "esModuleInterop": true,
     "strict": true,
     "outDir": "dist",
+    "sourceMap": true,
     "rootDir": "src",
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
