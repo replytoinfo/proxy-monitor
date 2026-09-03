@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { encrypt, decrypt, isEncrypted, isEncryptionEnabled } from "./crypto.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, "..", "data");
+export const DATA_DIR = join(__dirname, "..", "data");
 const DB_PATH = process.env.DB_PATH ?? join(DATA_DIR, "proxy-monitor.db");
 
 // Secure directory and file permissions
