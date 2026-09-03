@@ -54,3 +54,13 @@ export function buildStats(hours = 24, now = new Date()): Stats {
 
   return { generated_at: now.toISOString(), window_hours: hours, proxies };
 }
+
+/**
+ * Атомарная запись: tmp в той же папке + rename, чтобы читатель по ssh
+ * никогда не увидел половину файла. Ошибку не глотаем — решает вызывающий.
+ */
+export function writeStats(path = STATS_PATH, hours = 24): void {
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(buildStats(hours), null, 1), { mode: 0o600 });
+  renameSync(tmp, path);
+}

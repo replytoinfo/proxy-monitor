@@ -102,3 +102,28 @@ describe("buildStats", () => {
     expect(s.window_hours).toBe(24);
   });
 });
+
+describe("writeStats", () => {
+  const dir = join(tmpdir(), `pm-stats-dir-${process.pid}`);
+  const file = join(dir, "stats.json");
+
+  beforeAll(() => mkdirSync(dir, { recursive: true }));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("пишет валидный JSON и не оставляет tmp-файл", () => {
+    stats.writeStats(file, 24);
+
+    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    expect(Array.isArray(parsed.proxies)).toBe(true);
+    expect(parsed.window_hours).toBe(24);
+    expect(existsSync(`${file}.tmp`)).toBe(false);
+  });
+
+  it("при ошибке записи бросает и оставляет старый файл", () => {
+    writeFileSync(file, '{"old":true}');
+    const badPath = join(dir, "no-such-dir", "stats.json");
+
+    expect(() => stats.writeStats(badPath, 24)).toThrow();
+    expect(readFileSync(file, "utf8")).toBe('{"old":true}');
+  });
+});
