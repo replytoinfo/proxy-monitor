@@ -129,3 +129,23 @@ describe("writeStats", () => {
     expect(existsSync(`${badPath}.tmp`)).toBe(false);
   });
 });
+
+describe("buildStats label fallback", () => {
+  it("подставляет group_name вместо пустого label", () => {
+    const res = db.addProxy({ host: "grp.example", port: 9100, type: "http", group_name: "G1" });
+    const id = Number(res.lastInsertRowid);
+
+    const row = stats.buildStats(24).proxies.find((p) => p.id === id);
+
+    expect(row?.label).toBe("G1");
+  });
+
+  it("label приоритетнее group_name", () => {
+    const res = db.addProxy({ host: "grp2.example", port: 9101, type: "http", label: "MyLabel", group_name: "G2" });
+    const id = Number(res.lastInsertRowid);
+
+    const row = stats.buildStats(24).proxies.find((p) => p.id === id);
+
+    expect(row?.label).toBe("MyLabel");
+  });
+});

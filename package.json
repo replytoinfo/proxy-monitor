@@ -1,6 +1,6 @@
 {
   "name": "proxy-monitor",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Proxy monitoring system with Telegram alerts",
   "type": "module",
   "packageManager": "pnpm@10.29.2",

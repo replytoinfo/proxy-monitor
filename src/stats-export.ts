@@ -38,7 +38,7 @@ export function buildStats(hours = 24, now = new Date()): Stats {
     const total = q?.total ?? 0;
     return {
       id: p.id,
-      label: p.label,
+      label: p.label ?? p.group_name ?? null, // та же цепочка имени, что в /list
       host: p.host,
       port: p.port,
       type: p.type,
