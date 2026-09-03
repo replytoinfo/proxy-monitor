@@ -39,6 +39,7 @@ import {
 import { fetchExternalIp } from "./checker/ip.js";
 import { nextIpState, isRotationStale, nextProbeFailure } from "./rotation.js";
 import { pingWatchdog } from "./watchdog.js";
+import { writeStats } from "./stats-export.js";
 
 const CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour
 
@@ -47,6 +48,15 @@ let cleanupTimer: ReturnType<typeof setInterval> | null = null;
 let ipTimer: ReturnType<typeof setInterval> | null = null;
 let ipCheckRunning = false;
 let checksRunning = false;
+
+/** Экспорт для внешних потребителей; сбой записи — не повод останавливать монитор. */
+function exportStats() {
+  try {
+    writeStats();
+  } catch (err) {
+    console.error("[monitor] Stats export error:", err instanceof Error ? err.message : err);
+  }
+}
 
 const downSince = new Map<number, number>();
 
@@ -473,6 +483,7 @@ export function startMonitor() {
   );
 
   runChecks().catch((err) => console.error("[monitor] Check error:", err));
+  exportStats();
 
   checkTimer = setInterval(() => {
     runChecks().catch((err) => console.error("[monitor] Check error:", err));
@@ -480,6 +491,7 @@ export function startMonitor() {
 
   cleanupTimer = setInterval(() => {
     try {
+      exportStats();
       const result = deleteOldChecks(config.CHECKS_RETENTION_HOURS);
       if (result.changes > 0) {
         console.log(`[monitor] Cleaned up ${result.changes} old checks`);
