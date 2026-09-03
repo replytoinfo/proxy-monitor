@@ -123,7 +123,9 @@ describe("writeStats", () => {
     writeFileSync(file, '{"old":true}');
     const badPath = join(dir, "no-such-dir", "stats.json");
 
-    expect(() => stats.writeStats(badPath, 24)).toThrow();
+    expect(() => stats.writeStats(badPath, 24)).toThrow(/ENOENT/);
     expect(readFileSync(file, "utf8")).toBe('{"old":true}');
+    expect(existsSync(badPath)).toBe(false);
+    expect(existsSync(`${badPath}.tmp`)).toBe(false);
   });
 });
