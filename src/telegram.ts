@@ -1,6 +1,7 @@
 import { config } from "./config.js";
 import {
   addProxy,
+  updateProxyEndpoint,
   getProxies,
   deleteProxy,
   toggleProxy,
@@ -16,7 +17,7 @@ import {
   getChecksSpanHours,
   type ProxyRow,
 } from "./db.js";
-import { hasStrayCredentialText, parseProxyList } from "./parser.js";
+import { hasStrayCredentialText, parseProxyList, parseProxy } from "./parser.js";
 import { qualityIcon, formatQualityTail, formatWindow } from "./quality-format.js";
 import { measureSpeed, SPEED_DEADLINE_MS } from "./checker/speed.js";
 import { selectSpeedTargets, isSpeedRunning, runSpeed } from "./speed-command.js";
@@ -280,6 +281,7 @@ async function handleCommand(
         "<b>Proxy Monitor</b>",
         "",
         "/add [группа] — добавить прокси",
+        "/edit <i>id</i> — заменить адрес/доступы (история сохраняется)",
         "/list [группа] — список со статусами",
         "/ip [группа] — текущие IP и возраст",
         "/label <i>id имя</i> — псевдоним",
@@ -551,6 +553,58 @@ async function handleCommand(
     return;
   }
 
+  if (trimmed.startsWith("/edit")) {
+    // Формат: /edit <id>\n<строка прокси>
+    const body = trimmed.replace(/^\/edit\s*/, "");
+    const lines = body.split("\n").map((l) => l.trim()).filter(Boolean);
+    const idStr = lines[0] ?? "";
+    const proxyLine = lines[1] ?? "";
+
+    const FORMAT_HINT =
+      "Формат:\n<code>/edit id\nhost:port</code> или <code>socks5://user:pass@host:port</code>";
+
+    if (!idStr.match(/^\d+$/) || !proxyLine) {
+      await sendMessage(FORMAT_HINT, chatId);
+      return;
+    }
+
+    const id = parseInt(idStr, 10);
+    const parsed = parseProxy(proxyLine);
+    if (!parsed) {
+      await sendMessage(
+        `Не удалось разобрать строку прокси.\n\n${FORMAT_HINT}`,
+        chatId
+      );
+      return;
+    }
+
+    const result = updateProxyEndpoint(id, {
+      host: parsed.host,
+      port: parsed.port,
+      type: parsed.type,
+      username: parsed.username ?? null,
+      password: parsed.password ?? null,
+    });
+
+    if (!result) {
+      await sendMessage(`Прокси #${id} не найдена.`, chatId);
+      return;
+    }
+
+    const { before, after } = result;
+    const name = [after.group_name, after.label].filter(Boolean).join(" ") || String(after.id);
+    const oldAddr = `${escapeHtml(before.host)}:${before.port}`;
+    const newAddr = `${escapeHtml(after.host)}:${after.port}`;
+    const typeInfo = after.type !== before.type ? ` (${escapeHtml(after.type)})` : "";
+    const loginInfo = after.username ? `, логин ${escapeHtml(after.username)}` : "";
+
+    await sendMessage(
+      `\u{270F}\u{FE0F} #${id} ${escapeHtml(name)}: <code>${oldAddr}</code> \u{2192} <code>${newAddr}</code>${typeInfo}${loginInfo}`,
+      chatId
+    );
+    return;
+  }
+
   if (trimmed.startsWith("/label")) {
     const args = trimmed.replace(/^\/label\s*/, "");
     const match = args.match(/^(\d+)\s+(.+)/);
@@ -690,6 +744,7 @@ async function setBotCommands() {
     { command: "quality", description: "Качество за неделю" },
     { command: "speed", description: "Замер скорости скачивания" },
     { command: "add", description: "Добавить прокси [в группу]" },
+    { command: "edit", description: "Заменить адрес/доступы прокси" },
     { command: "label", description: "Псевдоним для прокси" },
     { command: "group", description: "Сменить группу прокси" },
     { command: "del", description: "Удалить прокси по ID" },

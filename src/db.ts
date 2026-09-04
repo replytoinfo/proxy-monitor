@@ -260,6 +260,34 @@ export function setGroup(id: number, groupName: string | null) {
   return stmtSetGroup.run(groupName, id);
 }
 
+const stmtUpdateEndpoint = db.prepare(
+  `UPDATE proxies SET host = ?, port = ?, type = ?, username = ?, password = ? WHERE id = ?`
+);
+const stmtDeleteIpState = db.prepare(`DELETE FROM proxy_ip_state WHERE proxy_id = ?`);
+
+/**
+ * Заменяет сетевой адрес и учётные данные прокси, сохраняя id, группу, псевдоним и историю.
+ * Состояние IP-ротации и счётчик сбоев пробы сбрасываются — старый IP больше не актуален.
+ * Возвращает { before, after } или null, если id не существует.
+ */
+export function updateProxyEndpoint(
+  id: number,
+  fields: { host: string; port: number; type: string; username: string | null; password: string | null }
+): { before: ProxyRow; after: ProxyRow } | null {
+  const before = getProxyById(id);
+  if (!before) return null;
+
+  const encPassword = fields.password ? encrypt(fields.password) : null;
+  stmtUpdateEndpoint.run(fields.host, fields.port, fields.type, fields.username, encPassword, id);
+
+  // Старый IP-адрес и счётчик зондирования уже не актуальны
+  stmtDeleteIpState.run(id);
+  stmtClearProbeFailure.run(id);
+
+  const after = getProxyById(id)!;
+  return { before, after };
+}
+
 // --- Checks ---
 
 const stmtSaveCheck = db.prepare(
