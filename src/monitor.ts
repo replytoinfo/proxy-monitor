@@ -58,7 +58,7 @@ function exportStats() {
   }
 }
 
-const downSince = new Map<number, number>();
+import { downSince } from "./proxy-state.js";
 
 // --- Shared concurrency pool ---
 

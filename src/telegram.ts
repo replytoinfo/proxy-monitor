@@ -18,6 +18,7 @@ import {
   type ProxyRow,
 } from "./db.js";
 import { hasStrayCredentialText, parseProxyList, parseProxy } from "./parser.js";
+import { forgetProxyState } from "./proxy-state.js";
 import { qualityIcon, formatQualityTail, formatWindow } from "./quality-format.js";
 import { measureSpeed, SPEED_DEADLINE_MS } from "./checker/speed.js";
 import { selectSpeedTargets, isSpeedRunning, runSpeed } from "./speed-command.js";
@@ -590,6 +591,8 @@ async function handleCommand(
       await sendMessage(`Прокси #${id} не найдена.`, chatId);
       return;
     }
+
+    forgetProxyState(id);
 
     const { before, after } = result;
     const name = [after.group_name, after.label].filter(Boolean).join(" ") || String(after.id);

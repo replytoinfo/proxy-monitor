@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rmSync } from "node:fs";
+import { forgetProxyState, _downSinceForTest } from "../proxy-state.js";
 
 vi.mock("../config.js", () => ({
   config: {
@@ -165,5 +166,46 @@ describe("updateProxyEndpoint", () => {
     expect(result).not.toBeNull();
     expect(result!.after.username).toBeNull();
     expect(result!.after.password).toBeNull();
+  });
+
+  it("вставляет маркер recovery если последний uptime-алерт — down", () => {
+    const res = db.addProxy({ host: "alert.example.com", port: 3128, type: "http" });
+    const id = Number(res.lastInsertRowid);
+    db.saveAlert(id, "down");
+
+    db.updateProxyEndpoint(id, {
+      host: "alert2.example.com",
+      port: 3128,
+      type: "http",
+      username: null,
+      password: null,
+    });
+
+    const last = db.getLastAlert(id, "uptime");
+    expect(last?.type).toBe("recovery");
+  });
+
+  it("не вставляет маркер recovery если последний uptime-алерт не down", () => {
+    const res = db.addProxy({ host: "noalert.example.com", port: 3128, type: "http" });
+    const id = Number(res.lastInsertRowid);
+    // нет алертов вообще — не вставляем
+
+    db.updateProxyEndpoint(id, {
+      host: "noalert2.example.com",
+      port: 3128,
+      type: "http",
+      username: null,
+      password: null,
+    });
+
+    const last = db.getLastAlert(id, "uptime");
+    expect(last).toBeUndefined();
+  });
+
+  it("forgetProxyState удаляет id из downSince", () => {
+    _downSinceForTest.set(42, Date.now());
+    expect(_downSinceForTest.has(42)).toBe(true);
+    forgetProxyState(42);
+    expect(_downSinceForTest.has(42)).toBe(false);
   });
 });

@@ -264,10 +264,18 @@ const stmtUpdateEndpoint = db.prepare(
   `UPDATE proxies SET host = ?, port = ?, type = ?, username = ?, password = ? WHERE id = ?`
 );
 const stmtDeleteIpState = db.prepare(`DELETE FROM proxy_ip_state WHERE proxy_id = ?`);
+const stmtEditClearProbeFailure = db.prepare(`DELETE FROM ip_probe_failures WHERE proxy_id = ?`);
+const stmtInsertRecoveryMarker = db.prepare(`INSERT INTO alerts (proxy_id, type) VALUES (?, 'recovery')`);
+const stmtLastUptimeAlertForEdit = db.prepare(
+  `SELECT * FROM alerts WHERE proxy_id = ? AND type IN ('down', 'recovery')
+   ORDER BY sent_at DESC, id DESC LIMIT 1`
+);
 
 /**
  * Заменяет сетевой адрес и учётные данные прокси, сохраняя id, группу, псевдоним и историю.
  * Состояние IP-ротации и счётчик сбоев пробы сбрасываются — старый IP больше не актуален.
+ * Если последний uptime-алерт — 'down', вставляется маркер 'recovery', чтобы машина
+ * состояний не слала ложный RECOVERED при первой удачной проверке нового адреса.
  * Возвращает { before, after } или null, если id не существует.
  */
 export function updateProxyEndpoint(
@@ -282,7 +290,13 @@ export function updateProxyEndpoint(
 
   // Старый IP-адрес и счётчик зондирования уже не актуальны
   stmtDeleteIpState.run(id);
-  stmtClearProbeFailure.run(id);
+  stmtEditClearProbeFailure.run(id);
+
+  // Нейтрализуем ложный RECOVERED: если последний алерт — down, ставим recovery-маркер
+  const lastUptime = stmtLastUptimeAlertForEdit.get(id) as AlertRow | undefined;
+  if (lastUptime?.type === "down") {
+    stmtInsertRecoveryMarker.run(id);
+  }
 
   const after = getProxyById(id)!;
   return { before, after };
