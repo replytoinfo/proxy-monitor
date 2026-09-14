@@ -58,15 +58,26 @@ describe("getQualityAll", () => {
     expect(row?.quality).toBe(100);
   });
 
-  it("считает сбоем успех через запасной адрес", () => {
+  it("fallback не снижает quality — успех через запасной адрес считается up", () => {
     const id = freshProxy();
     for (let i = 0; i < 3; i++) db.saveCheck(id, "up", 200, null, false);
     db.saveCheck(id, "up", 10400, null, true);
 
     const row = db.getQualityAll(24).find((r) => r.proxy_id === id);
 
-    expect(row?.quality).toBe(75);
+    expect(row?.quality).toBe(100);
     expect(row?.fallback).toBe(1);
+    expect(row?.down).toBe(0);
+  });
+
+  it("прокси только с fallback-успехами и без DOWN даёт 100%", () => {
+    const id = freshProxy();
+    for (let i = 0; i < 5; i++) db.saveCheck(id, "up", 10000, null, true);
+
+    const row = db.getQualityAll(24).find((r) => r.proxy_id === id);
+
+    expect(row?.quality).toBe(100);
+    expect(row?.fallback).toBe(5);
     expect(row?.down).toBe(0);
   });
 
@@ -81,7 +92,7 @@ describe("getQualityAll", () => {
     expect(row?.down).toBe(1);
   });
 
-  it("не считает дважды проверку, которая и упала, и ходила в fallback", () => {
+  it("down+fallback на одной проверке — один down, не снимает дважды", () => {
     const id = freshProxy();
     for (let i = 0; i < 3; i++) db.saveCheck(id, "up", 200, null, false);
     db.saveCheck(id, "down", 20000, "оба адреса недоступны", true);
@@ -89,6 +100,8 @@ describe("getQualityAll", () => {
     const row = db.getQualityAll(24).find((r) => r.proxy_id === id);
 
     expect(row?.quality).toBe(75);
+    expect(row?.down).toBe(1);
+    expect(row?.fallback).toBe(1);
   });
 
   it("не показывает прокси, у которой нет проверок в окне", () => {

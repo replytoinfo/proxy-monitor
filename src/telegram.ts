@@ -443,10 +443,8 @@ async function handleCommand(
         `${qualityIcon(q.quality)} <b>#${p.id}</b> ${escapeHtml(name)} — ${pct}%`
       );
 
-      const parts = [`${q.total} проверок`, `сбоев ${q.bad}`];
-      // Разбивка нужна, только когда есть что разбивать: при нулевом fallback
-      // она повторяла бы число сбоев ещё дважды.
-      if (q.fallback > 0) parts.push(`DOWN ${q.down} · fallback ${q.fallback}`);
+      const parts = [`${q.total} проверок`, `DOWN ${q.down}`];
+      if (q.fallback > 0) parts.push(`fallback ${q.fallback}`);
       if (q.medianMs !== null) parts.push(`медиана ${q.medianMs}ms`);
       lines.push(`   <i>${parts.join(" · ")}</i>`);
     }

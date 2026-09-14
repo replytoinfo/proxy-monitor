@@ -336,10 +336,11 @@ export interface QualityRow {
   proxy_id: number;
   total: number;
   down: number;
+  /** Справочный счётчик: сколько раз успешная проверка прошла через запасной адрес.
+   *  В процент качества не входит — при системной недоступности основного URL
+   *  с IP прокси (кейс DE2, 14.09.2026) fallback врёт о реальном состоянии прокси. */
   fallback: number;
-  /** Проверок со сбоем; down и fallback на одной проверке считаются один раз. */
-  bad: number;
-  /** Доля проверок без сбоев, в процентах. Сбой — down либо уход в fallback. */
+  /** Доля проверок со статусом up, в процентах. Равна uptime. */
   quality: number;
   /** Медиана отклика; null, если ни у одной проверки нет времени. */
   medianMs: number | null;
@@ -349,8 +350,7 @@ const stmtQuality = db.prepare(
   `SELECT proxy_id,
           COUNT(*) AS total,
           SUM(CASE WHEN status != 'up' THEN 1 ELSE 0 END) AS down,
-          SUM(CASE WHEN used_fallback = 1 THEN 1 ELSE 0 END) AS fallback,
-          SUM(CASE WHEN status != 'up' OR used_fallback = 1 THEN 1 ELSE 0 END) AS bad
+          SUM(CASE WHEN used_fallback = 1 THEN 1 ELSE 0 END) AS fallback
    FROM checks
    WHERE checked_at > datetime('now', ? || ' hours')
    GROUP BY proxy_id`
@@ -376,9 +376,9 @@ const stmtMedian = db.prepare(
  * Качество каждой прокси за окно — одним запросом на всех, чтобы /list
  * не превращался в N запросов по числу прокси.
  *
- * Сбоем считается и down, и успех через запасной адрес: прокси, которая
- * доходит только через fallback, исправно показывает `up`, но теряет
- * каждый n-й запрос — без этого такая деградация остаётся невидимой.
+ * quality = uptime: процент проверок со статусом up. fallback — справочный
+ * счётчик, в формулу не входит: при системной недоступности основного URL
+ * с IP прокси (кейс DE2, 14.09.2026) он занижает реальный аптайм.
  */
 const stmtSpan = db.prepare(
   `SELECT CAST((julianday('now') - julianday(MIN(checked_at))) * 24 AS INTEGER) AS hours
@@ -404,7 +404,7 @@ export function getQualityAll(hours: number): QualityRow[] {
 
   return rows.map((r) => ({
     ...r,
-    quality: r.total === 0 ? 0 : ((r.total - r.bad) / r.total) * 100,
+    quality: r.total === 0 ? 0 : ((r.total - r.down) / r.total) * 100,
     medianMs: medians.get(r.proxy_id) ?? null,
   }));
 }

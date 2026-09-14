@@ -14,7 +14,9 @@ export interface StatsProxy {
   fallback: number;
   /** Доля проверок со статусом up, в процентах; null без проверок. */
   uptime: number | null;
-  /** Доля проверок без down и без fallback; null без проверок. */
+  /** Доля проверок со статусом up, в процентах; null без проверок.
+   *  Оставлен для обратной совместимости и равен uptime — fallback в формулу
+   *  не входит (при системной недоступности основного URL он занижает аптайм). */
   quality: number | null;
   median_ms: number | null;
 }

@@ -75,6 +75,18 @@ describe("buildStats", () => {
     });
   });
 
+  it("fallback не снижает quality — совпадает с uptime при только fallback-успехах", () => {
+    const id = freshProxy({ label: "T-FB" });
+    for (let i = 0; i < 4; i++) db.saveCheck(id, "up", 300, null, true);
+
+    const row = stats.buildStats(24).proxies.find((p) => p.id === id);
+
+    expect(row?.uptime).toBe(100);
+    expect(row?.quality).toBe(100);
+    expect(row?.fallback).toBe(4);
+    expect(row?.down).toBe(0);
+  });
+
   it("отдаёт null вместо NaN, когда проверок в окне нет", () => {
     const id = freshProxy();
 
