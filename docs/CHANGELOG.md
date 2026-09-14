@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.7.1] — 2026-09-14
+
+### Changed
+
+- **`CHECK_URL` поменян на `http://www.gstatic.com/generate_204` (основной), `CHECK_URL_FALLBACK` — `http://cp.cloudflare.com/generate_204` (запасной).** Proxied.com-прокси (DE2, CZ1 и др.) в ~7% проверок не пропускали cp.cloudflare.com при живом gstatic: fallback засчитывался как сбой в `/quality`, метрика занижала реальный аптайм (наблюдалось до DE2: quality 91% при фактическом uptime 98%). На проде переключено 14.09.2026 через `.env` без деплоя; дефолты в коде и `.env.example` приведены в соответствие.
+
 ## [1.7.0] — 2026-09-04
 
 ### Added

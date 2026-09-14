@@ -146,9 +146,9 @@ export const config = {
   ),
   // Адреса-заглушки провайдеров CDN: отдают 204 без тела и держатся годами.
   // Основной и запасной берём у разных компаний — общий отказ маловероятен.
-  CHECK_URL: requireCheckUrl(process.env.CHECK_URL ?? "http://cp.cloudflare.com/generate_204"),
+  CHECK_URL: requireCheckUrl(process.env.CHECK_URL ?? "http://www.gstatic.com/generate_204"),
   CHECK_URL_FALLBACK: optionalFallbackUrl(
-    process.env.CHECK_URL_FALLBACK ?? "http://www.gstatic.com/generate_204"
+    process.env.CHECK_URL_FALLBACK ?? "http://cp.cloudflare.com/generate_204"
   ),
   IP_PROBE_FAIL_THRESHOLD: envInt("IP_PROBE_FAIL_THRESHOLD", 3, 1),
   SPEED_URL: resolveSpeedUrl(process.env.SPEED_URL),
