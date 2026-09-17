@@ -21,9 +21,9 @@
     ]
   },
   "dependencies": {
-    "@sentry/node": "^10.72.0",
+    "@sentry/node": "^10.74.0",
     "better-sqlite3": "^12.10.0",
-    "socks": "^2.8.9"
+    "socks": "^2.8.10"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
