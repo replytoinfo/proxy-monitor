@@ -514,10 +514,24 @@ export function startMonitor() {
       `[monitor] IP rotation checks — interval: ${config.IP_CHECK_INTERVAL}ms, max age: ${config.ROTATION_MAX_AGE}ms`
     );
     // Первый прогон не сразу: при старте у прокси ещё нет свежего up-статуса.
-    ipTimer = setInterval(() => {
-      runIpChecks().catch((err) => console.error("[monitor] IP check error:", err));
-    }, config.IP_CHECK_INTERVAL);
+    scheduleIpTimer(
+      config.IP_CHECK_INTERVAL,
+      config.CHECK_INTERVAL,
+      () => runIpChecks().catch((err) => console.error("[monitor] IP check error:", err))
+    );
   }
+}
+
+/** Экспортируется для тестов. */
+export function scheduleIpTimer(
+  ipInterval: number,
+  checkInterval: number,
+  onTick: () => void
+): void {
+  const phaseMs = checkInterval / 2; // полпериода liveness — IP-тик максимально далеко от обоих соседних liveness-тиков
+  ipTimer = setTimeout(() => {
+    ipTimer = setInterval(onTick, ipInterval);
+  }, phaseMs);
 }
 
 export function stopMonitor() {
