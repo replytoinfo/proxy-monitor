@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { qualityIcon, formatQualityTail } from "../quality-format.js";
+import { qualityIcon, formatQualityTail, formatSpanLabel } from "../quality-format.js";
 
 describe("qualityIcon", () => {
   it("зелёный от 99% и выше", () => {
@@ -38,3 +38,32 @@ describe("formatQualityTail", () => {
   });
 });
 
+describe("formatSpanLabel", () => {
+  it("36ч → «1д» (округление вниз)", () => {
+    expect(formatSpanLabel(36)).toBe("1д");
+  });
+
+  it("12ч → «12ч»", () => {
+    expect(formatSpanLabel(12)).toBe("12ч");
+  });
+
+  it("168ч → «7д»", () => {
+    expect(formatSpanLabel(168)).toBe("7д");
+  });
+
+  it("0ч → «<1ч» (дробный охват меньше часа)", () => {
+    expect(formatSpanLabel(0)).toBe("<1ч");
+  });
+
+  it("0.5ч → «<1ч»", () => {
+    expect(formatSpanLabel(0.5)).toBe("<1ч");
+  });
+
+  it("1ч → «1ч» (ровно один час)", () => {
+    expect(formatSpanLabel(1)).toBe("1ч");
+  });
+
+  it("23ч → «23ч» (не доросло до суток)", () => {
+    expect(formatSpanLabel(23)).toBe("23ч");
+  });
+});

@@ -31,7 +31,10 @@ export const STATS_PATH = join(DATA_DIR, "stats.json");
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
-/** Статистика всех прокси за окно — то же, что видит /quality, без секретов. */
+/**
+ * Статистика всех прокси строго за окно hours по checks (окно 24 ч для дейли-отчёта);
+ * /quality считает по постоянным счётчикам с момента /qreset.
+ */
 export function buildStats(hours = 24, now = new Date()): Stats {
   const quality = new Map(getQualityWindow(hours).map((q) => [q.proxy_id, q]));
 

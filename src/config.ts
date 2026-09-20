@@ -23,6 +23,21 @@ function envBool(name: string, fallback: boolean): boolean {
 }
 
 /**
+ * IP-проба должна быть кратна CHECK_INTERVAL, чтобы никогда не совпадать
+ * по фазе с проверкой доступности (фаза IP = CHECK/2 от ближайшего liveness-тика).
+ */
+export function resolveIpCheckInterval(ipInterval: number, checkInterval: number): number {
+  const k = Math.max(1, Math.ceil(ipInterval / checkInterval));
+  const aligned = k * checkInterval;
+  if (aligned !== ipInterval) {
+    console.warn(
+      `[config] IP_CHECK_INTERVAL=${ipInterval} rounded to ${aligned} (${k}×CHECK_INTERVAL=${checkInterval})`
+    );
+  }
+  return aligned;
+}
+
+/**
  * Порог залипания должен быть не меньше двух циклов опроса,
  * иначе он срабатывает раньше, чем проходит хотя бы один цикл наблюдения.
  */
@@ -122,11 +137,14 @@ function optionalWatchdogUrl(raw: string | undefined): string | null {
   return url.href;
 }
 
+const CHECK_INTERVAL = envInt("CHECK_INTERVAL", 45_000, 5_000);
+const IP_CHECK_INTERVAL = resolveIpCheckInterval(envInt("IP_CHECK_INTERVAL", 300_000, 60_000), CHECK_INTERVAL);
+
 export const config = {
   TELEGRAM_BOT_TOKEN: envRequired("TELEGRAM_BOT_TOKEN"),
   TELEGRAM_CHAT_ID: envRequired("TELEGRAM_CHAT_ID"),
 
-  CHECK_INTERVAL: envInt("CHECK_INTERVAL", 45_000, 5_000),
+  CHECK_INTERVAL,
   FAIL_THRESHOLD: envInt("FAIL_THRESHOLD", 4, 1),
   MAX_PROXIES: envInt("MAX_PROXIES", 100, 1),
   MAX_ADD_BODY_BYTES: envInt("MAX_ADD_BODY_BYTES", 10_000, 100),
@@ -136,10 +154,10 @@ export const config = {
   ALLOW_PRIVATE_TARGETS: envBool("ALLOW_PRIVATE_TARGETS", false),
   ENCRYPTION_KEY: process.env.ENCRYPTION_KEY ?? "",
   REMINDER_INTERVAL: envInt("REMINDER_INTERVAL", 12, 0) * 3_600_000,
-  IP_CHECK_INTERVAL: envInt("IP_CHECK_INTERVAL", 300_000, 60_000),
+  IP_CHECK_INTERVAL,
   ROTATION_MAX_AGE: resolveRotationMaxAge(
     envInt("ROTATION_MAX_AGE", 2_700_000, 0),
-    envInt("IP_CHECK_INTERVAL", 300_000, 60_000)
+    IP_CHECK_INTERVAL
   ),
   IP_ECHO_URLS: parseEchoUrls(
     process.env.IP_ECHO_URL ?? "http://api.ipify.org,http://ifconfig.me/ip"

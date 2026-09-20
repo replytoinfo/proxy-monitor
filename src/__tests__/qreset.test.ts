@@ -211,15 +211,23 @@ describe("/quality заголовок", () => {
     expect(text).toMatch(/Качество с \d{2}\.\d{2} \(\d+ дн\.\)/);
   });
 
-  it("подпись медианы содержит число дней «Nд»", async () => {
+  it("подпись медианы содержит «медиана Nд Xms» при ~30ч данных", async () => {
     const id = freshProxy();
-    for (const ms of [100, 200, 300]) db.saveCheck(id, "up", ms, null, false);
+    // saveCheck обновляет счётчики (q_total), прямая вставка растягивает охват
+    db.saveCheck(id, "up", 200, null, false);
+    // Вставляем старую запись чтобы span стал ~30ч (stmtSpan = MIN checked_at)
+    db.default
+      .prepare(
+        `INSERT INTO checks (proxy_id, status, response_time, error, used_fallback, checked_at)
+         VALUES (?, 'up', 200, NULL, 0, datetime('now', '-30 hours'))`
+      )
+      .run(id);
 
     await telegram.handleCommand("12345", "/quality");
 
     const text = lastSendText(fetchMock);
-    // "медиана 7д 200ms" — число дней retention
-    expect(text).toMatch(/медиана \d+д \d+ms/);
+    // "медиана 1д 200ms" — фактический охват ~30ч → 1д
+    expect(text).toMatch(/медиана 1д \d+ms/);
   });
 
   it("суффикс «с DD.MM» не ставится при одинаковой дате (разница в секундах)", async () => {
@@ -288,5 +296,26 @@ describe("/list показывает хвост качества из счётч
     const text = lastSendText(fetchMock);
     // /list должен показать «· 75%» из счётчиков
     expect(text).toContain("· 75%");
+  });
+});
+
+// ── escapeHtml для formatSpanLabel ────────────────────────────────────────────
+
+describe("/quality: formatSpanLabel экранируется в HTML", () => {
+  it("«<1ч» → «&lt;1ч» — сырой символ < не должен попасть в тело sendMessage", async () => {
+    const id = freshProxy();
+    // Одна проверка за последние 30 минут → spanHours < 1 → formatSpanLabel вернёт «<1ч»
+    db.default
+      .prepare(
+        `INSERT INTO checks (proxy_id, status, response_time, error, used_fallback, checked_at)
+         VALUES (?, 'up', 150, NULL, 0, datetime('now', '-30 minutes'))`
+      )
+      .run(id);
+
+    await telegram.handleCommand("12345", "/quality");
+
+    const text = lastSendText(fetchMock);
+    expect(text).toContain("&lt;1ч");
+    expect(text).not.toContain("<1ч");
   });
 });

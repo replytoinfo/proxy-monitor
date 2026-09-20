@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { formatSpanLabel } from "../quality-format.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rmSync } from "node:fs";
@@ -138,5 +139,128 @@ describe("getQualityAll", () => {
     const row = db.getQualityAll(24).find((r) => r.proxy_id === id);
 
     expect(row?.medianMs).toBe(240);
+  });
+});
+
+// ── F10: q_since устанавливается при первом saveCheck ─────────────────────────
+
+describe("F10: q_since устанавливается при первом saveCheck, а не от created_at", () => {
+  it("since ≈ сейчас, а не дата created_at в прошлом", () => {
+    const id = freshProxy();
+    // Устанавливаем created_at в прошлое через raw UPDATE
+    db.default
+      .prepare("UPDATE proxies SET created_at = '2020-01-01 00:00:00' WHERE id = ?")
+      .run(id);
+
+    db.saveCheck(id, "up", 200, null, false);
+
+    const q = db.getQualityAll(168).find((r) => r.proxy_id === id);
+    // since должно быть близко к сейчас, не 2020
+    expect(q).toBeDefined();
+    const sinceYear = new Date(q!.since + "Z").getFullYear();
+    expect(sinceYear).toBeGreaterThanOrEqual(2026);
+  });
+});
+
+// ── F3: Паузнутые прокси не в getQualityAll ───────────────────────────────────
+
+describe("F3: паузнутые прокси отсутствуют в getQualityAll", () => {
+  it("прокси с q_total>0 и enabled=0 отсутствует в getQualityAll", () => {
+    const id = freshProxy();
+    db.saveCheck(id, "up", 200, null, false);
+    // Выключаем прокси
+    db.toggleProxy(id, false);
+
+    const q = db.getQualityAll(168).find((r) => r.proxy_id === id);
+    expect(q).toBeUndefined();
+  });
+
+  it("после resume прокси появляется в getQualityAll", () => {
+    const id = freshProxy();
+    db.saveCheck(id, "up", 200, null, false);
+    db.toggleProxy(id, false);
+    db.toggleProxy(id, true);
+
+    const q = db.getQualityAll(168).find((r) => r.proxy_id === id);
+    expect(q).toBeDefined();
+    expect(q?.total).toBe(1);
+  });
+});
+
+// ── F8: getQualityAll() без аргумента — без медиан ───────────────────────────
+
+describe("F8: getQualityAll() без аргумента не запрашивает медианы", () => {
+  it("medianMs = null, quality посчитан", () => {
+    const id = freshProxy();
+    for (const ms of [100, 200, 300]) db.saveCheck(id, "up", ms, null, false);
+
+    const row = db.getQualityAll().find((r) => r.proxy_id === id);
+    expect(row).toBeDefined();
+    expect(row!.quality).toBe(100);
+    expect(row!.medianMs).toBeNull();
+  });
+});
+
+// ── F3: resetQuality игнорирует since паузнутых прокси ───────────────────────
+
+describe("F3: resetQuality() не учитывает since паузнутой прокси", () => {
+  it("resetQuality() игнорирует since паузнутой прокси", () => {
+    const a = freshProxy(); // активная
+    const p = freshProxy(); // будет паузнута
+
+    db.saveCheck(a, "up", 1, null, false);
+    db.saveCheck(p, "up", 1, null, false);
+
+    // Устанавливаем p.since раньше a.since — если паузнутая включается в MIN, вернётся 01.09
+    db.default.prepare("UPDATE proxies SET q_since='2026-09-01 00:00:00' WHERE id=?").run(p);
+    db.default.prepare("UPDATE proxies SET q_since='2026-09-10 00:00:00' WHERE id=?").run(a);
+
+    db.toggleProxy(p, false);
+
+    const prev = db.resetQuality();
+    // MIN since из enabled прокси = 2026-09-10, не 2026-09-01
+    expect(prev).toBe("2026-09-10 00:00:00");
+  });
+});
+
+// ── R4: per-proxy span для подписи медианы ─────────────────────────────────
+
+describe("R4: spanHours отражает фактический охват по каждой прокси", () => {
+  it("прокси с 7д данных → spanHours=168, прокси с 30ч данных → spanHours=30", () => {
+    // Используем окно 200ч, чтобы запись «ровно 168ч назад» вошла в выборку
+    const WINDOW = 200;
+
+    const id7d = freshProxy();
+    const id30h = freshProxy();
+
+    // Самая ранняя запись для id7d: 168 часов назад (ровно 7 дней)
+    db.default
+      .prepare(
+        `INSERT INTO checks (proxy_id, status, response_time, error, used_fallback, checked_at)
+         VALUES (?, 'up', 100, NULL, 0, datetime('now', '-168 hours'))`
+      )
+      .run(id7d);
+    db.saveCheck(id7d, "up", 100, null, false);
+
+    // Самая ранняя запись для id30h: 30 часов назад
+    db.default
+      .prepare(
+        `INSERT INTO checks (proxy_id, status, response_time, error, used_fallback, checked_at)
+         VALUES (?, 'up', 100, NULL, 0, datetime('now', '-30 hours'))`
+      )
+      .run(id30h);
+    db.saveCheck(id30h, "up", 100, null, false);
+
+    const rows = db.getQualityAll(WINDOW);
+    const row7d = rows.find((r) => r.proxy_id === id7d);
+    const row30h = rows.find((r) => r.proxy_id === id30h);
+
+    // spanHours должен отражать реальный охват прокси, а не глобальный MIN
+    expect(row7d?.spanHours).toBe(168);
+    expect(row30h?.spanHours).toBe(30);
+
+    // Форматтер даёт ожидаемые метки
+    expect(formatSpanLabel(row7d!.spanHours!)).toBe("7д");
+    expect(formatSpanLabel(row30h!.spanHours!)).toBe("1д");
   });
 });

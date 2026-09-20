@@ -106,25 +106,49 @@ try {
   // Column already exists
 }
 
-// Migration: quality counters на прокси — хранят накопленные итоги с момента
-// последнего сброса. Все четыре ALTER в одном try: либо все успешны (первый
-// запуск нового кода) — тогда бэкфилл заполняет данные из checks; либо первый
-// падает (колонки уже есть) — catch пропускает блок целиком.
-try {
-  db.exec(`ALTER TABLE proxies ADD COLUMN q_total INTEGER NOT NULL DEFAULT 0`);
-  db.exec(`ALTER TABLE proxies ADD COLUMN q_down INTEGER NOT NULL DEFAULT 0`);
-  db.exec(`ALTER TABLE proxies ADD COLUMN q_fallback INTEGER NOT NULL DEFAULT 0`);
-  db.exec(`ALTER TABLE proxies ADD COLUMN q_since TEXT`);
-  // Бэкфилл: выполняется только один раз, сразу после успешных ALTER.
-  db.exec(`
-    UPDATE proxies SET
-      q_total   = COALESCE((SELECT COUNT(*) FROM checks WHERE proxy_id = proxies.id), 0),
-      q_down    = COALESCE((SELECT SUM(CASE WHEN status != 'up' THEN 1 ELSE 0 END) FROM checks WHERE proxy_id = proxies.id), 0),
-      q_fallback= COALESCE((SELECT SUM(CASE WHEN used_fallback = 1 THEN 1 ELSE 0 END) FROM checks WHERE proxy_id = proxies.id), 0),
-      q_since   = COALESCE((SELECT MIN(checked_at) FROM checks WHERE proxy_id = proxies.id), proxies.created_at)
-  `);
-} catch {
-  // Columns already exist
+// Migration: quality counters — добавляем только отсутствующие колонки;
+// если любая из четырёх q_*-колонок отсутствовала (неполная миграция),
+// все четыре пересчитываются из checks одним окном для согласованности.
+{
+  const existingCols = new Set(
+    (db.pragma("table_info(proxies)") as Array<{ name: string }>).map((c) => c.name)
+  );
+  // Бэкфилл нужен если ЛЮБАЯ из четырёх q_*-колонок отсутствовала (частичная миграция).
+  const needsAnyQCol =
+    !existingCols.has("q_total") ||
+    !existingCols.has("q_down") ||
+    !existingCols.has("q_fallback") ||
+    !existingCols.has("q_since");
+  db.transaction(() => {
+    const cols: Record<string, string> = {
+      q_total: "INTEGER NOT NULL DEFAULT 0",
+      q_down: "INTEGER NOT NULL DEFAULT 0",
+      q_fallback: "INTEGER NOT NULL DEFAULT 0",
+      q_since: "TEXT",
+    };
+    for (const [name, type] of Object.entries(cols)) {
+      if (!existingCols.has(name)) db.exec(`ALTER TABLE proxies ADD COLUMN ${name} ${type}`);
+    }
+    if (needsAnyQCol) {
+      // Бэкфилл при первом запуске или частичной миграции:
+      // пересчитываем ВСЕ четыре колонки из checks для согласованности.
+      db.exec(`
+        UPDATE proxies SET
+          q_total   = COALESCE((SELECT COUNT(*) FROM checks WHERE proxy_id = proxies.id), 0),
+          q_down    = COALESCE((SELECT SUM(CASE WHEN status != 'up' THEN 1 ELSE 0 END) FROM checks WHERE proxy_id = proxies.id), 0),
+          q_fallback= COALESCE((SELECT SUM(CASE WHEN used_fallback = 1 THEN 1 ELSE 0 END) FROM checks WHERE proxy_id = proxies.id), 0),
+          q_since   = COALESCE((SELECT MIN(checked_at) FROM checks WHERE proxy_id = proxies.id), proxies.created_at)
+      `);
+    }
+  })();
+  // Backfill q_since for 1.9.0-era rows: q_total>0 but q_since=NULL (neither addProxy
+  // nor stmtIncrCounters wrote q_since in 1.9.0). Guard avoids write-txn on clean DBs.
+  const needsQSinceBackfill = db
+    .prepare("SELECT 1 FROM proxies WHERE q_since IS NULL AND q_total > 0 LIMIT 1")
+    .get();
+  if (needsQSinceBackfill) {
+    db.exec("UPDATE proxies SET q_since = created_at WHERE q_since IS NULL AND q_total > 0");
+  }
 }
 
 // --- Encrypt existing plaintext passwords if encryption is now enabled ---
@@ -166,10 +190,6 @@ export interface ProxyRow {
   group_name: string | null;
   enabled: number;
   created_at: string;
-  q_total: number;
-  q_down: number;
-  q_fallback: number;
-  q_since: string | null;
 }
 
 export interface CheckRow {
@@ -296,6 +316,19 @@ const stmtLastUptimeAlertForEdit = db.prepare(
    ORDER BY sent_at DESC, id DESC LIMIT 1`
 );
 
+const txnUpdateEndpoint = db.transaction(
+  (id: number, host: string, port: number, type: string, username: string | null, encPassword: string | null) => {
+    stmtUpdateEndpoint.run(host, port, type, username, encPassword, id);
+    stmtDeleteIpState.run(id);
+    stmtEditClearProbeFailure.run(id);
+    resetQuality(id);
+    const lastUptime = stmtLastUptimeAlertForEdit.get(id) as AlertRow | undefined;
+    if (lastUptime?.type === "down") {
+      stmtInsertRecoveryMarker.run(id);
+    }
+  }
+);
+
 /**
  * Заменяет сетевой адрес и учётные данные прокси, сохраняя id, группу, псевдоним и историю.
  * Состояние IP-ротации и счётчик сбоев пробы сбрасываются — старый IP больше не актуален.
@@ -311,18 +344,7 @@ export function updateProxyEndpoint(
   if (!before) return null;
 
   const encPassword = fields.password ? encrypt(fields.password) : null;
-  stmtUpdateEndpoint.run(fields.host, fields.port, fields.type, fields.username, encPassword, id);
-
-  // Старый IP-адрес и счётчик зондирования уже не актуальны
-  stmtDeleteIpState.run(id);
-  stmtEditClearProbeFailure.run(id);
-  resetQuality(id);
-
-  // Нейтрализуем ложный RECOVERED: если последний алерт — down, ставим recovery-маркер
-  const lastUptime = stmtLastUptimeAlertForEdit.get(id) as AlertRow | undefined;
-  if (lastUptime?.type === "down") {
-    stmtInsertRecoveryMarker.run(id);
-  }
+  txnUpdateEndpoint(id, fields.host, fields.port, fields.type, fields.username, encPassword);
 
   const after = getProxyById(id)!;
   return { before, after };
@@ -338,7 +360,8 @@ const stmtIncrCounters = db.prepare(`
   UPDATE proxies SET
     q_total    = q_total + 1,
     q_down     = q_down     + (CASE WHEN ? != 'up' THEN 1 ELSE 0 END),
-    q_fallback = q_fallback + ?
+    q_fallback = q_fallback + ?,
+    q_since    = COALESCE(q_since, datetime('now'))
   WHERE id = ?
 `);
 
@@ -385,6 +408,8 @@ export interface QualityRow {
   quality: number;
   /** Медиана отклика; null, если ни у одной проверки нет времени. */
   medianMs: number | null;
+  /** Фактический охват данных по этой прокси, часов (≤ hours окна). null когда медиана не запрашивалась. */
+  spanHours: number | null;
   /** Момент начала отсчёта (UTC, SQLite datetime). COALESCE(q_since, created_at). */
   since: string;
 }
@@ -397,7 +422,7 @@ const stmtCounters = db.prepare(`
          q_fallback AS fallback,
          COALESCE(q_since, created_at) AS since
   FROM proxies
-  WHERE q_total > 0
+  WHERE q_total > 0 AND enabled = 1
 `);
 
 /**
@@ -416,6 +441,15 @@ const stmtMedian = db.prepare(
    ) WHERE rn = cnt / 2 + 1`
 );
 
+/** Фактический охват по каждой прокси отдельно — чтобы новая прокси не показывала «7д». */
+const stmtPerProxySpan = db.prepare(
+  `SELECT proxy_id,
+          CAST((julianday('now') - julianday(MIN(checked_at))) * 24 AS INTEGER) AS hours
+   FROM checks
+   WHERE checked_at > datetime('now', ? || ' hours')
+   GROUP BY proxy_id`
+);
+
 /** Агрегат по checks строго за окно hours — для stats.json (window_hours). */
 const stmtQualityWindow = db.prepare(`
   SELECT proxy_id,
@@ -427,17 +461,13 @@ const stmtQualityWindow = db.prepare(`
   GROUP BY proxy_id
 `);
 
-const stmtResetQualityAll = db.prepare(`
+const stmtResetQuality = db.prepare(`
   UPDATE proxies SET q_total=0, q_down=0, q_fallback=0, q_since=datetime('now')
+  WHERE (? IS NULL OR id = ?)
 `);
-const stmtResetQualityOne = db.prepare(`
-  UPDATE proxies SET q_total=0, q_down=0, q_fallback=0, q_since=datetime('now') WHERE id=?
-`);
-const stmtGetMinSince = db.prepare(`
-  SELECT MIN(COALESCE(q_since, created_at)) AS since FROM proxies WHERE q_total > 0
-`);
-const stmtGetSinceById = db.prepare(`
-  SELECT COALESCE(q_since, created_at) AS since FROM proxies WHERE id=?
+const stmtGetSince = db.prepare(`
+  SELECT MIN(COALESCE(q_since, created_at)) AS since FROM proxies
+  WHERE (? IS NULL AND q_total > 0 AND enabled = 1) OR id = ?
 `);
 
 /**
@@ -445,44 +475,49 @@ const stmtGetSinceById = db.prepare(`
  * Возвращает прежнее начало отсчёта (UTC, SQLite datetime) или null если прокси нет.
  */
 export function resetQuality(proxyId?: number): string | null {
-  if (proxyId !== undefined) {
-    const prev = stmtGetSinceById.get(proxyId) as { since: string | null } | undefined;
-    stmtResetQualityOne.run(proxyId);
-    return prev?.since ?? null;
-  }
-  const prev = stmtGetMinSince.get() as { since: string | null };
-  stmtResetQualityAll.run();
+  const key = proxyId ?? null;
+  const prev = stmtGetSince.get(key, key) as { since: string | null };
+  stmtResetQuality.run(key, key);
   return prev?.since ?? null;
 }
 
-/** Объединяет строки с медианами; вычисляет quality = uptime. */
+/** Объединяет строки с медианами и per-proxy охватом; вычисляет quality = uptime.
+ *  Если hours не задан — медиана и spanHours не запрашиваются (null). */
 function withMedians<T extends { proxy_id: number; total: number; down: number }>(
   rows: T[],
-  hours: number
-): Array<T & { quality: number; medianMs: number | null }> {
+  hours?: number
+): Array<T & { quality: number; medianMs: number | null; spanHours: number | null }> {
   // ceiling: медиана только за retention-окно → агрегат по дням, если понадобится с момента сброса
   const medians = new Map<number, number>();
-  for (const m of stmtMedian.all(`-${hours}`) as Array<{ proxy_id: number; median: number }>) {
-    medians.set(m.proxy_id, m.median);
+  const spans = new Map<number, number>();
+  if (hours !== undefined) {
+    for (const m of stmtMedian.all(`-${hours}`) as Array<{ proxy_id: number; median: number }>) {
+      medians.set(m.proxy_id, m.median);
+    }
+    for (const s of stmtPerProxySpan.all(`-${hours}`) as Array<{ proxy_id: number; hours: number }>) {
+      spans.set(s.proxy_id, Math.min(hours, s.hours));
+    }
   }
   return rows.map((r) => ({
     ...r,
-    quality: ((r.total - r.down) / r.total) * 100,
+    quality: r.total === 0 ? 0 : ((r.total - r.down) / r.total) * 100,
     medianMs: medians.get(r.proxy_id) ?? null,
+    spanHours: spans.get(r.proxy_id) ?? null,
   }));
 }
 
 /**
  * Качество каждой прокси — total/down/fallback/since из счётчиков proxies;
  * медиана — из checks за retention-окно hours (на случай большого объёма).
+ * Без hours медиана не запрашивается (для /list).
  *
  * quality = uptime: процент проверок со статусом up. fallback — справочный
  * счётчик, в формулу не входит: при системной недоступности основного URL
  * с IP прокси (кейс DE2, 14.09.2026) он занижает реальный аптайм.
  */
-export function getQualityAll(hours: number): QualityRow[] {
+export function getQualityAll(hours?: number): QualityRow[] {
   return withMedians(
-    stmtCounters.all() as Array<Omit<QualityRow, "quality" | "medianMs">>,
+    stmtCounters.all() as Array<Omit<QualityRow, "quality" | "medianMs" | "spanHours">>,
     hours
   );
 }
@@ -490,7 +525,7 @@ export function getQualityAll(hours: number): QualityRow[] {
 /** Агрегат строго за окно hours по checks — для stats.json (window_hours). */
 export function getQualityWindow(hours: number): Array<Omit<QualityRow, "since">> {
   return withMedians(
-    stmtQualityWindow.all(`-${hours}`) as Array<Omit<QualityRow, "quality" | "medianMs" | "since">>,
+    stmtQualityWindow.all(`-${hours}`) as Array<Omit<QualityRow, "quality" | "medianMs" | "spanHours" | "since">>,
     hours
   );
 }

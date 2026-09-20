@@ -1,6 +1,7 @@
 import { config } from "./config.js";
 import {
   getEnabledProxies,
+  getProxyById,
   saveCheck,
   getConsecutiveFailCount,
   getLastAlert,
@@ -18,6 +19,7 @@ import {
   clearProbeFailure,
   saveSystemAlert,
   getLastSystemAlert,
+  decryptProxy,
   type ProxyRow,
 } from "./db.js";
 import { checkWithFallback } from "./checker/liveness.js";
@@ -73,11 +75,23 @@ const checkPool = createSemaphore(config.MAX_CONCURRENT_CHECKS);
 
 async function checkProxy(proxy: ProxyRow, primary: URL, fallback: URL | null) {
   const result = await checkWithFallback(proxy, primary, fallback);
-
   const status = result.ok ? "up" : "down";
-  saveCheck(proxy.id, status, result.responseTime, result.error ?? null, result.usedFallback);
 
-  return { proxy, status, usedFallback: result.usedFallback };
+  // Гонка /edit: если адрес или данные изменились пока шла проверка — результат устарел.
+  const current = getProxyById(proxy.id);
+  const dec = current ? decryptProxy(current) : null;
+  const stale =
+    !dec ||
+    dec.host !== proxy.host ||
+    dec.port !== proxy.port ||
+    dec.type !== proxy.type ||
+    dec.username !== proxy.username ||
+    dec.password !== proxy.password;
+  if (!stale) {
+    saveCheck(proxy.id, status, result.responseTime, result.error ?? null, result.usedFallback);
+  }
+
+  return { proxy, status, usedFallback: result.usedFallback, stale };
 }
 
 /**
@@ -139,13 +153,18 @@ export async function runChecks() {
     );
 
     const checked: Array<{ proxy: ProxyRow; status: string; usedFallback: boolean }> = [];
+    let incomplete = false;
     for (const settled of results) {
       if (settled.status === "rejected") {
         const reason =
           settled.reason instanceof Error ? settled.reason.message : settled.reason;
         console.error("[monitor] Proxy check failed:", reason);
+        incomplete = true;
         continue;
       }
+      // Stale results (proxy deleted or edited mid-check) are excluded from all
+      // post-processing; they mark the cycle incomplete to prevent false mass_down/recovery.
+      if (settled.value.stale) { incomplete = true; continue; }
       checked.push(settled.value);
     }
 
@@ -153,8 +172,6 @@ export async function runChecks() {
     if (checked.some((c) => c.usedFallback && c.status === "up")) {
       console.log("[monitor] primary check URL failing, fallback in use");
     }
-
-    const incomplete = results.some((settled) => settled.status === "rejected");
     const suppressDown = await handleMassOutage(checked, incomplete);
 
     for (const { proxy, status } of checked) {

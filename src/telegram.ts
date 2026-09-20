@@ -19,7 +19,7 @@ import {
 } from "./db.js";
 import { hasStrayCredentialText, parseProxyList, parseProxy } from "./parser.js";
 import { forgetProxyState } from "./proxy-state.js";
-import { qualityIcon, formatQualityTail } from "./quality-format.js";
+import { qualityIcon, formatQualityTail, formatSpanLabel } from "./quality-format.js";
 import { measureSpeed, SPEED_DEADLINE_MS } from "./checker/speed.js";
 import { selectSpeedTargets, isSpeedRunning, runSpeed } from "./speed-command.js";
 
@@ -333,7 +333,7 @@ export async function handleCommand(
     }
 
     const quality = new Map(
-      getQualityAll(config.CHECKS_RETENTION_HOURS).map((q) => [q.proxy_id, q.quality])
+      getQualityAll().map((q) => [q.proxy_id, q.quality])
     );
 
     const groups = new Map<string, ProxyRow[]>();
@@ -446,7 +446,6 @@ export async function handleCommand(
     // Самое раннее since определяет заголовок; прокси с более поздним since помечаются отдельно.
     const minSince = rows.reduce((m, r) => (r.since < m ? r.since : m), rows[0].since);
     const headDate = fmtDateKyiv(minSince);
-    const retDays = Math.round(config.CHECKS_RETENTION_HOURS / 24);
     const lines = [
       `<b>Качество с ${headDate} (${daysSince(minSince)} дн.)</b>`,
       "",
@@ -468,7 +467,10 @@ export async function handleCommand(
 
       const parts = [`${q.total} проверок`, `DOWN ${q.down}`];
       if (q.fallback > 0) parts.push(`fallback ${q.fallback}`);
-      if (q.medianMs !== null) parts.push(`медиана ${retDays}д ${q.medianMs}ms`);
+      // Метка охвата — по каждой прокси отдельно; новая прокси не «крадёт» метку старой.
+      if (q.medianMs !== null && q.spanHours !== null) {
+        parts.push(`медиана ${escapeHtml(formatSpanLabel(q.spanHours))} ${q.medianMs}ms`);
+      }
       lines.push(`   <i>${parts.join(" · ")}</i>`);
     }
 
