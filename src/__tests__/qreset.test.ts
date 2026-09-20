@@ -304,13 +304,10 @@ describe("/list показывает хвост качества из счётч
 describe("/quality: formatSpanLabel экранируется в HTML", () => {
   it("«<1ч» → «&lt;1ч» — сырой символ < не должен попасть в тело sendMessage", async () => {
     const id = freshProxy();
-    // Одна проверка за последние 30 минут → spanHours < 1 → formatSpanLabel вернёт «<1ч»
-    db.default
-      .prepare(
-        `INSERT INTO checks (proxy_id, status, response_time, error, used_fallback, checked_at)
-         VALUES (?, 'up', 150, NULL, 0, datetime('now', '-30 minutes'))`
-      )
-      .run(id);
+    // Прокси появляется в /quality только через saveCheck (q_total>0).
+    // saveCheck вставляет запись и инкрементирует счётчики; checked_at = datetime('now').
+    // spanHours рассчитывается из MIN(checked_at) в окне → < 1ч → formatSpanLabel → «<1ч».
+    db.saveCheck(id, "up", 150, null, false);
 
     await telegram.handleCommand("12345", "/quality");
 

@@ -176,14 +176,40 @@ describe("F1(б): частичная схема — только q_total", () =>
 }
 
 describe("F1(в): повторное открытие не трогает счётчики", () => {
-  it("все колонки присутствуют при повторном открытии, q_total стабилен", async () => {
+  let db2: typeof import("../db.js");
+
+  beforeAll(async () => {
+    // Явно выставляем DB_PATH — не полагаемся на afterAll соседнего блока.
+    process.env.DB_PATH = DB_FILE;
+    // Вставляем 3 строки в checks и выставляем счётчики НЕ равными агрегату.
+    // Если бы needsAnyQCol вернул true, повторное открытие пересчитало бы q_total=3 и
+    // q_since=MIN(checked_at). Тест проверяет, что этого не происходит: все 4 колонки
+    // уже есть → миграция не запускается → счётчики остаются как выставлены вручную.
+    db.default
+      .prepare("INSERT INTO checks (proxy_id, status, response_time, used_fallback) VALUES (1, 'up', 100, 0)")
+      .run();
+    db.default
+      .prepare("INSERT INTO checks (proxy_id, status, response_time, used_fallback) VALUES (1, 'up', 150, 0)")
+      .run();
+    db.default
+      .prepare("INSERT INTO checks (proxy_id, status, response_time, used_fallback) VALUES (1, 'up', 200, 0)")
+      .run();
+    db.default
+      .prepare("UPDATE proxies SET q_total=1, q_down=0, q_fallback=0, q_since='2026-09-20 15:41:31' WHERE id=1")
+      .run();
     vi.resetModules();
-    const db2 = await import("../db.js");
+    db2 = await import("../db.js");
+  });
+
+  it("все 4 колонки присутствуют, счётчики не пересчитались из checks", () => {
     const row = db2.default
-      .prepare("SELECT q_total FROM proxies WHERE id = 1")
-      .get() as { q_total: number };
-    // После первого открытия q_total=0 (пересчитан из пустых checks); второе открытие не меняет.
-    expect(row.q_total).toBe(0);
+      .prepare("SELECT q_total, q_since FROM proxies WHERE id = 1")
+      .get() as { q_total: number; q_since: string };
+    // Выставили вручную: q_total=1, q_since='2026-09-20 15:41:31'.
+    // В checks — 3 строки, MIN(checked_at) ≠ '2026-09-20 15:41:31'.
+    // Если бы needsAnyQCol=true, пересчитал бы q_total=3; тест упал бы.
+    expect(row.q_total).toBe(1);
+    expect(row.q_since).toBe("2026-09-20 15:41:31");
     const cols = new Set(
       (db2.default.pragma("table_info(proxies)") as Array<{ name: string }>).map((c) => c.name)
     );
@@ -269,6 +295,8 @@ describe("F1(в): повторное открытие не трогает счё
         .get() as { q_total: number; q_down: number; q_fallback: number; q_since: string };
       expect(row.q_total).toBe(5);
       expect(row.q_down).toBe(1);
+      // Все 5 checks имеют used_fallback=0 → q_fallback=0 (4-я колонка покрыта)
+      expect(row.q_fallback).toBe(0);
       expect(row.q_since).not.toBeNull();
     });
 

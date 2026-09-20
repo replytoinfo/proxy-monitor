@@ -21,7 +21,7 @@ describe("resolveIpCheckInterval", () => {
     const { config } = await import("../config.js");
     expect(config.IP_CHECK_INTERVAL).toBe(315000);
     expect(
-      warnSpy.mock.calls.filter((a) => String(a[0]).includes("rounded")).length
+      warnSpy.mock.calls.filter((a) => String(a[0]).includes("IP_CHECK_INTERVAL")).length
     ).toBe(1);
   });
 

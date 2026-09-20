@@ -160,6 +160,19 @@ describe("F10: q_since устанавливается при первом saveCh
     const sinceYear = new Date(q!.since + "Z").getFullYear();
     expect(sinceYear).toBeGreaterThanOrEqual(2026);
   });
+
+  it("второй saveCheck не сдвигает q_since", () => {
+    const id = freshProxy();
+    db.saveCheck(id, "up", 100, null, false);
+    const before = db.default
+      .prepare("SELECT q_since FROM proxies WHERE id = ?")
+      .get(id) as { q_since: string };
+    db.saveCheck(id, "down", null, "timeout", false);
+    const after = db.default
+      .prepare("SELECT q_since FROM proxies WHERE id = ?")
+      .get(id) as { q_since: string };
+    expect(after.q_since).toBe(before.q_since);
+  });
 });
 
 // ── F3: Паузнутые прокси не в getQualityAll ───────────────────────────────────
