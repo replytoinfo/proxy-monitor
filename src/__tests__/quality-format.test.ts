@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { qualityIcon, formatQualityTail, formatWindow } from "../quality-format.js";
+import { qualityIcon, formatQualityTail } from "../quality-format.js";
 
 describe("qualityIcon", () => {
   it("зелёный от 99% и выше", () => {
@@ -38,16 +38,3 @@ describe("formatQualityTail", () => {
   });
 });
 
-describe("formatWindow", () => {
-  it("показывает часы, пока не набрались сутки", () => {
-    expect(formatWindow(5)).toBe("за 5 часов");
-  });
-
-  it("показывает дни, когда набралось больше суток", () => {
-    expect(formatWindow(72)).toBe("за 3 дня");
-  });
-
-  it("округляет вниз — окно не должно выглядеть полнее, чем есть", () => {
-    expect(formatWindow(47)).toBe("за 1 день");
-  });
-});

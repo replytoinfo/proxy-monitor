@@ -19,11 +19,3 @@ export function formatQualityTail(quality: number | undefined): string {
   const shown = quality === 100 ? 100 : Math.min(99, Math.round(quality));
   return ` · ${shown}%`;
 }
-
-/** Фактический охват данных: пока неделя не набралась, обещать неделю нельзя. */
-export function formatWindow(hours: number): string {
-  if (hours < 24) return `за ${hours} часов`;
-  const days = Math.floor(hours / 24);
-  const word = days === 1 ? "день" : days < 5 ? "дня" : "дней";
-  return `за ${days} ${word}`;
-}

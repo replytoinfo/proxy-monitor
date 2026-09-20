@@ -106,6 +106,27 @@ try {
   // Column already exists
 }
 
+// Migration: quality counters на прокси — хранят накопленные итоги с момента
+// последнего сброса. Все четыре ALTER в одном try: либо все успешны (первый
+// запуск нового кода) — тогда бэкфилл заполняет данные из checks; либо первый
+// падает (колонки уже есть) — catch пропускает блок целиком.
+try {
+  db.exec(`ALTER TABLE proxies ADD COLUMN q_total INTEGER NOT NULL DEFAULT 0`);
+  db.exec(`ALTER TABLE proxies ADD COLUMN q_down INTEGER NOT NULL DEFAULT 0`);
+  db.exec(`ALTER TABLE proxies ADD COLUMN q_fallback INTEGER NOT NULL DEFAULT 0`);
+  db.exec(`ALTER TABLE proxies ADD COLUMN q_since TEXT`);
+  // Бэкфилл: выполняется только один раз, сразу после успешных ALTER.
+  db.exec(`
+    UPDATE proxies SET
+      q_total   = COALESCE((SELECT COUNT(*) FROM checks WHERE proxy_id = proxies.id), 0),
+      q_down    = COALESCE((SELECT SUM(CASE WHEN status != 'up' THEN 1 ELSE 0 END) FROM checks WHERE proxy_id = proxies.id), 0),
+      q_fallback= COALESCE((SELECT SUM(CASE WHEN used_fallback = 1 THEN 1 ELSE 0 END) FROM checks WHERE proxy_id = proxies.id), 0),
+      q_since   = COALESCE((SELECT MIN(checked_at) FROM checks WHERE proxy_id = proxies.id), proxies.created_at)
+  `);
+} catch {
+  // Columns already exist
+}
+
 // --- Encrypt existing plaintext passwords if encryption is now enabled ---
 
 function migrateCredentials() {
@@ -145,6 +166,10 @@ export interface ProxyRow {
   group_name: string | null;
   enabled: number;
   created_at: string;
+  q_total: number;
+  q_down: number;
+  q_fallback: number;
+  q_since: string | null;
 }
 
 export interface CheckRow {
@@ -291,6 +316,7 @@ export function updateProxyEndpoint(
   // Старый IP-адрес и счётчик зондирования уже не актуальны
   stmtDeleteIpState.run(id);
   stmtEditClearProbeFailure.run(id);
+  resetQuality(id);
 
   // Нейтрализуем ложный RECOVERED: если последний алерт — down, ставим recovery-маркер
   const lastUptime = stmtLastUptimeAlertForEdit.get(id) as AlertRow | undefined;
@@ -308,6 +334,14 @@ const stmtSaveCheck = db.prepare(
   `INSERT INTO checks (proxy_id, status, response_time, error, used_fallback) VALUES (?, ?, ?, ?, ?)`
 );
 
+const stmtIncrCounters = db.prepare(`
+  UPDATE proxies SET
+    q_total    = q_total + 1,
+    q_down     = q_down     + (CASE WHEN ? != 'up' THEN 1 ELSE 0 END),
+    q_fallback = q_fallback + ?
+  WHERE id = ?
+`);
+
 const stmtRecentChecks = db.prepare(
   `SELECT * FROM checks WHERE proxy_id = ? ORDER BY checked_at DESC LIMIT ?`
 );
@@ -322,6 +356,13 @@ const stmtLastCheck = db.prepare(
   `SELECT * FROM checks WHERE proxy_id = ? ORDER BY checked_at DESC, id DESC LIMIT 1`
 );
 
+const txnSaveCheck = db.transaction(
+  (proxyId: number, status: string, responseTime: number | null, error: string | null, usedFallback: number) => {
+    stmtSaveCheck.run(proxyId, status, responseTime, error, usedFallback);
+    stmtIncrCounters.run(status, usedFallback, proxyId);
+  }
+);
+
 export function saveCheck(
   proxyId: number,
   status: "up" | "down",
@@ -329,7 +370,7 @@ export function saveCheck(
   error: string | null,
   usedFallback = false
 ) {
-  return stmtSaveCheck.run(proxyId, status, responseTime, error, usedFallback ? 1 : 0);
+  return txnSaveCheck(proxyId, status, responseTime, error, usedFallback ? 1 : 0);
 }
 
 export interface QualityRow {
@@ -344,17 +385,20 @@ export interface QualityRow {
   quality: number;
   /** Медиана отклика; null, если ни у одной проверки нет времени. */
   medianMs: number | null;
+  /** Момент начала отсчёта (UTC, SQLite datetime). COALESCE(q_since, created_at). */
+  since: string;
 }
 
-const stmtQuality = db.prepare(
-  `SELECT proxy_id,
-          COUNT(*) AS total,
-          SUM(CASE WHEN status != 'up' THEN 1 ELSE 0 END) AS down,
-          SUM(CASE WHEN used_fallback = 1 THEN 1 ELSE 0 END) AS fallback
-   FROM checks
-   WHERE checked_at > datetime('now', ? || ' hours')
-   GROUP BY proxy_id`
-);
+/** Счётчики качества из таблицы proxies (без временного потолка). */
+const stmtCounters = db.prepare(`
+  SELECT id AS proxy_id,
+         q_total AS total,
+         q_down  AS down,
+         q_fallback AS fallback,
+         COALESCE(q_since, created_at) AS since
+  FROM proxies
+  WHERE q_total > 0
+`);
 
 /**
  * Медиана отклика по каждой прокси. Отдельный запрос с оконной функцией:
@@ -372,41 +416,83 @@ const stmtMedian = db.prepare(
    ) WHERE rn = cnt / 2 + 1`
 );
 
+/** Агрегат по checks строго за окно hours — для stats.json (window_hours). */
+const stmtQualityWindow = db.prepare(`
+  SELECT proxy_id,
+         COUNT(*) AS total,
+         SUM(CASE WHEN status != 'up' THEN 1 ELSE 0 END) AS down,
+         SUM(CASE WHEN used_fallback = 1 THEN 1 ELSE 0 END) AS fallback
+  FROM checks
+  WHERE checked_at > datetime('now', ? || ' hours')
+  GROUP BY proxy_id
+`);
+
+const stmtResetQualityAll = db.prepare(`
+  UPDATE proxies SET q_total=0, q_down=0, q_fallback=0, q_since=datetime('now')
+`);
+const stmtResetQualityOne = db.prepare(`
+  UPDATE proxies SET q_total=0, q_down=0, q_fallback=0, q_since=datetime('now') WHERE id=?
+`);
+const stmtGetMinSince = db.prepare(`
+  SELECT MIN(COALESCE(q_since, created_at)) AS since FROM proxies WHERE q_total > 0
+`);
+const stmtGetSinceById = db.prepare(`
+  SELECT COALESCE(q_since, created_at) AS since FROM proxies WHERE id=?
+`);
+
 /**
- * Качество каждой прокси за окно — одним запросом на всех, чтобы /list
- * не превращался в N запросов по числу прокси.
+ * Сбрасывает счётчики качества (всех или одной прокси).
+ * Возвращает прежнее начало отсчёта (UTC, SQLite datetime) или null если прокси нет.
+ */
+export function resetQuality(proxyId?: number): string | null {
+  if (proxyId !== undefined) {
+    const prev = stmtGetSinceById.get(proxyId) as { since: string | null } | undefined;
+    stmtResetQualityOne.run(proxyId);
+    return prev?.since ?? null;
+  }
+  const prev = stmtGetMinSince.get() as { since: string | null };
+  stmtResetQualityAll.run();
+  return prev?.since ?? null;
+}
+
+/** Объединяет строки с медианами; вычисляет quality = uptime. */
+function withMedians<T extends { proxy_id: number; total: number; down: number }>(
+  rows: T[],
+  hours: number
+): Array<T & { quality: number; medianMs: number | null }> {
+  // ceiling: медиана только за retention-окно → агрегат по дням, если понадобится с момента сброса
+  const medians = new Map<number, number>();
+  for (const m of stmtMedian.all(`-${hours}`) as Array<{ proxy_id: number; median: number }>) {
+    medians.set(m.proxy_id, m.median);
+  }
+  return rows.map((r) => ({
+    ...r,
+    quality: ((r.total - r.down) / r.total) * 100,
+    medianMs: medians.get(r.proxy_id) ?? null,
+  }));
+}
+
+/**
+ * Качество каждой прокси — total/down/fallback/since из счётчиков proxies;
+ * медиана — из checks за retention-окно hours (на случай большого объёма).
  *
  * quality = uptime: процент проверок со статусом up. fallback — справочный
  * счётчик, в формулу не входит: при системной недоступности основного URL
  * с IP прокси (кейс DE2, 14.09.2026) он занижает реальный аптайм.
  */
-const stmtSpan = db.prepare(
-  `SELECT CAST((julianday('now') - julianday(MIN(checked_at))) * 24 AS INTEGER) AS hours
-   FROM checks WHERE checked_at > datetime('now', ? || ' hours')`
-);
-
-/**
- * Сколько часов истории реально накоплено, но не больше окна. Нужно, чтобы
- * /quality не обещал неделю, когда база живёт вторые сутки.
- */
-export function getChecksSpanHours(windowHours: number): number {
-  const row = stmtSpan.get(`-${windowHours}`) as { hours: number | null };
-  return Math.min(windowHours, row.hours ?? 0);
+export function getQualityAll(hours: number): QualityRow[] {
+  return withMedians(
+    stmtCounters.all() as Array<Omit<QualityRow, "quality" | "medianMs">>,
+    hours
+  );
 }
 
-export function getQualityAll(hours: number): QualityRow[] {
-  const rows = stmtQuality.all(`-${hours}`) as Array<Omit<QualityRow, "quality" | "medianMs">>;
-
-  const medians = new Map<number, number>();
-  for (const m of stmtMedian.all(`-${hours}`) as Array<{ proxy_id: number; median: number }>) {
-    medians.set(m.proxy_id, m.median);
-  }
-
-  return rows.map((r) => ({
-    ...r,
-    quality: r.total === 0 ? 0 : ((r.total - r.down) / r.total) * 100,
-    medianMs: medians.get(r.proxy_id) ?? null,
-  }));
+/** Агрегат строго за окно hours по checks — для stats.json (window_hours). */
+export function getQualityWindow(hours: number): Array<Omit<QualityRow, "since">> {
+  return withMedians(
+    stmtQualityWindow.all(`-${hours}`) as Array<Omit<QualityRow, "quality" | "medianMs" | "since">>,
+    hours
+  );
 }
 
 export function getRecentChecks(proxyId: number, limit = 10): CheckRow[] {

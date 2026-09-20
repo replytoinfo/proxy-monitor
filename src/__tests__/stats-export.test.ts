@@ -113,6 +113,24 @@ describe("buildStats", () => {
     expect(s.generated_at).toBe("2026-09-03T12:00:00.000Z");
     expect(s.window_hours).toBe(24);
   });
+
+  it("не учитывает проверки старше окна", () => {
+    const id = freshProxy();
+    // Симулируем бэкфилл: 5 старых down-проверок уже в счётчиках
+    db.default.prepare("UPDATE proxies SET q_total=5, q_down=5 WHERE id=?").run(id);
+    const rawInsert = db.default.prepare(
+      `INSERT INTO checks (proxy_id, status, response_time, error, used_fallback, checked_at)
+       VALUES (?, 'down', null, 'old', 0, datetime('now', '-72 hours'))`
+    );
+    for (let i = 0; i < 5; i++) rawInsert.run(id);
+    // Одна свежая проверка
+    db.saveCheck(id, "up", 200, null, false);
+
+    const row = stats.buildStats(24).proxies.find((p) => p.id === id);
+    expect(row?.total).toBe(1);
+    expect(row?.down).toBe(0);
+    expect(row?.uptime).toBe(100);
+  });
 });
 
 describe("writeStats", () => {

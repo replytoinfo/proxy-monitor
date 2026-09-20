@@ -20,7 +20,8 @@ Monitoring for HTTP and SOCKS5 proxies, managed and alerted through Telegram. Ru
 | `/edit` | replace host/port/credentials while keeping id, group, label and check history |
 | `/list` | list proxies with their state |
 | `/status` | monitoring summary |
-| `/quality` | quality over the retention window |
+| `/quality` | quality since last reset (median over retention window) |
+| `/qreset` | reset quality counters for all proxies |
 | `/speed [id\|group]` | on-demand download speed test |
 | `/ip` | current external IPs and rotation age |
 | `/label`, `/group` | set a label or group |

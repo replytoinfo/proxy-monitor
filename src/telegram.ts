@@ -13,13 +13,13 @@ import {
   countIpChanges,
   fromSqlTime,
   getQualityAll,
+  resetQuality,
   decryptProxy,
-  getChecksSpanHours,
   type ProxyRow,
 } from "./db.js";
 import { hasStrayCredentialText, parseProxyList, parseProxy } from "./parser.js";
 import { forgetProxyState } from "./proxy-state.js";
-import { qualityIcon, formatQualityTail, formatWindow } from "./quality-format.js";
+import { qualityIcon, formatQualityTail } from "./quality-format.js";
 import { measureSpeed, SPEED_DEADLINE_MS } from "./checker/speed.js";
 import { selectSpeedTargets, isSpeedRunning, runSpeed } from "./speed-command.js";
 
@@ -31,6 +31,18 @@ let polling = false;
 
 export { escapeHtml } from "./html.js";
 import { escapeHtml } from "./html.js";
+
+// --- Date helpers (Kyiv timezone) ---
+
+/** Дата из SQLite UTC-строки → "DD.MM" в часовом поясе Киева. */
+function fmtDateKyiv(sqlUtc: string): string {
+  return new Date(fromSqlTime(sqlUtc)).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", timeZone: "Europe/Kyiv" });
+}
+
+/** Полных дней от sqlUtc до текущего момента. */
+function daysSince(sqlUtc: string): number {
+  return Math.floor((Date.now() - fromSqlTime(sqlUtc)) / 86_400_000);
+}
 
 // --- Send messages ---
 
@@ -265,7 +277,7 @@ function formatProxyStatus(p: ProxyRow, quality?: number): string {
   return `${statusIcon} <b>#${p.id}</b>${labelStr} <code>${safeHost}:${p.port}</code> ${safeType}${auth}${enabled} — ${statusText}${formatQualityTail(quality)}`;
 }
 
-async function handleCommand(
+export async function handleCommand(
   chatId: string,
   text: string
 ): Promise<void> {
@@ -291,7 +303,8 @@ async function handleCommand(
         "/pause <i>id</i> — пауза",
         "/resume <i>id</i> — продолжить",
         "/status — сводка",
-        "/quality — качество за неделю",
+        "/quality — качество с момента сброса",
+        "/qreset — сбросить отсчёт качества",
         "/speed [id|группа] — замер скорости",
         "",
         "<i>Форматы: ip:port, socks5://ip:port, user:pass@ip:port</i>",
@@ -429,8 +442,15 @@ async function handleCommand(
     }
 
     const byId = new Map(getProxies().map((p) => [p.id, p]));
-    const span = getChecksSpanHours(config.CHECKS_RETENTION_HOURS);
-    const lines = [`<b>Качество ${formatWindow(span)}</b>`, ""];
+
+    // Самое раннее since определяет заголовок; прокси с более поздним since помечаются отдельно.
+    const minSince = rows.reduce((m, r) => (r.since < m ? r.since : m), rows[0].since);
+    const headDate = fmtDateKyiv(minSince);
+    const retDays = Math.round(config.CHECKS_RETENTION_HOURS / 24);
+    const lines = [
+      `<b>Качество с ${headDate} (${daysSince(minSince)} дн.)</b>`,
+      "",
+    ];
 
     // Худшие сверху: показатель нужен, чтобы замечать проблемные, а не любоваться здоровыми.
     for (const q of [...rows].sort((a, b) => a.quality - b.quality)) {
@@ -439,17 +459,30 @@ async function handleCommand(
 
       const name = p.label ?? p.group_name ?? `${p.host}:${p.port}`;
       const pct = q.quality === 100 ? "100" : Math.min(99, Math.round(q.quality));
+      // Если у прокси since позже общего (после /edit) — сравниваем отображаемую дату
+      const day = fmtDateKyiv(q.since);
+      const proxySinceStr = day !== headDate ? ` с ${day}` : "";
       lines.push(
-        `${qualityIcon(q.quality)} <b>#${p.id}</b> ${escapeHtml(name)} — ${pct}%`
+        `${qualityIcon(q.quality)} <b>#${p.id}</b> ${escapeHtml(name)} — ${pct}%${proxySinceStr}`
       );
 
       const parts = [`${q.total} проверок`, `DOWN ${q.down}`];
       if (q.fallback > 0) parts.push(`fallback ${q.fallback}`);
-      if (q.medianMs !== null) parts.push(`медиана ${q.medianMs}ms`);
+      if (q.medianMs !== null) parts.push(`медиана ${retDays}д ${q.medianMs}ms`);
       lines.push(`   <i>${parts.join(" · ")}</i>`);
     }
 
     await sendMessage(lines.join("\n"), chatId);
+    return;
+  }
+
+  if (trimmed === "/qreset") {
+    const prevSince = resetQuality();
+    let msg = "Отсчёт качества сброшен.";
+    if (prevSince) {
+      msg += ` Предыдущее окно: с ${fmtDateKyiv(prevSince)} (${daysSince(prevSince)} дн.)`;
+    }
+    await sendMessage(msg, chatId);
     return;
   }
 
@@ -742,7 +775,8 @@ async function setBotCommands() {
     { command: "list", description: "Список прокси со статусами" },
     { command: "ip", description: "Текущие IP и ротация" },
     { command: "status", description: "Сводка" },
-    { command: "quality", description: "Качество за неделю" },
+    { command: "quality", description: "Качество с момента сброса" },
+    { command: "qreset", description: "Сбросить отсчёт качества" },
     { command: "speed", description: "Замер скорости скачивания" },
     { command: "add", description: "Добавить прокси [в группу]" },
     { command: "edit", description: "Заменить адрес/доступы прокси" },

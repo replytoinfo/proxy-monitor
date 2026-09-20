@@ -1,6 +1,6 @@
 import { writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
-import { getProxies, getQualityAll, DATA_DIR } from "./db.js";
+import { getProxies, getQualityWindow, DATA_DIR } from "./db.js";
 
 export interface StatsProxy {
   id: number;
@@ -33,7 +33,7 @@ const round1 = (n: number) => Math.round(n * 10) / 10;
 
 /** Статистика всех прокси за окно — то же, что видит /quality, без секретов. */
 export function buildStats(hours = 24, now = new Date()): Stats {
-  const quality = new Map(getQualityAll(hours).map((q) => [q.proxy_id, q]));
+  const quality = new Map(getQualityWindow(hours).map((q) => [q.proxy_id, q]));
 
   const proxies = getProxies().map((p): StatsProxy => {
     const q = quality.get(p.id);

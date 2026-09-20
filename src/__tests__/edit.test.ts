@@ -91,7 +91,7 @@ describe("updateProxyEndpoint", () => {
     expect(after.enabled).toBe(1);
   });
 
-  it("история проверок (getQualityAll) сохраняется после обновления", () => {
+  it("история проверок сохраняется, счётчики качества сбрасываются", () => {
     const res = db.addProxy({ host: "q.example.com", port: 3128, type: "http" });
     const id = Number(res.lastInsertRowid);
 
@@ -108,10 +108,9 @@ describe("updateProxyEndpoint", () => {
       password: null,
     });
 
-    const qualityRows = db.getQualityAll(24);
-    const row = qualityRows.find((r) => r.proxy_id === id);
-    expect(row).toBeDefined();
-    expect(row!.total).toBe(3);
+    // Проверки в checks сохраняются, счётчики качества обнуляются
+    expect(db.getRecentChecks(id, 10)).toHaveLength(3);
+    expect(db.getQualityAll(24).find((r) => r.proxy_id === id)).toBeUndefined();
   });
 
   it("состояние IP сбрасывается после обновления", () => {

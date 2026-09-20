@@ -118,28 +118,15 @@ describe("getQualityAll", () => {
     raw
       .prepare(
         `INSERT INTO checks (proxy_id, status, response_time, error, used_fallback, checked_at)
-         VALUES (?, 'down', 20000, 'старая', 1, datetime('now', '-30 hours'))`
+         VALUES (?, 'down', 20000, 'прямая вставка', 1, datetime('now', '-30 hours'))`
       )
       .run(id);
     db.saveCheck(id, "up", 200, null, false);
 
-    const row = db.getQualityAll(24).find((r) => r.proxy_id === id);
+    const row = db.getQualityWindow(24).find((r) => r.proxy_id === id);
 
     expect(row?.total).toBe(1);
     expect(row?.quality).toBe(100);
-  });
-
-  it("сообщает фактический охват истории, а не длину окна", async () => {
-    const id = freshProxy();
-    const raw = (await import("../db.js")).default;
-    raw
-      .prepare(
-        `INSERT INTO checks (proxy_id, status, response_time, error, used_fallback, checked_at)
-         VALUES (?, 'up', 200, NULL, 0, datetime('now', '-50 hours'))`
-      )
-      .run(id);
-
-    expect(db.getChecksSpanHours(168)).toBe(50);
   });
 
   it("даёт медиану отклика, устойчивую к выбросам таймаутов", () => {
