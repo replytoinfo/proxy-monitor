@@ -730,6 +730,14 @@ export function getLastAlert(
   return stmt.get(proxyId) as AlertRow | undefined;
 }
 
+/** id последней метки window_reset (/edit, /resume) — по смене видно, что окно сброшено. */
+export function getLastWindowResetId(proxyId: number): number {
+  const row = db
+    .prepare("SELECT MAX(id) AS id FROM alerts WHERE proxy_id = ? AND type = 'window_reset'")
+    .get(proxyId) as { id: number | null };
+  return row.id ?? 0;
+}
+
 /**
  * Молча закрывает деградацию (без сообщения): /edit и /pause — прежняя
  * деградация к новому устройству или к паузе отношения не имеет.

@@ -10,6 +10,7 @@ import {
   getLastCheck,
   getDegradedWindow,
   closeDegraded,
+  getLastWindowResetId,
   getIpState,
   upsertIpState,
   saveIpChangeAndState,
@@ -187,10 +188,12 @@ async function handleDegradation(checked: Array<{ proxy: ProxyRow }>): Promise<v
         proxy.host, proxy.port, proxy.type, stats,
         config.DEGRADED_WINDOW_MIN, params.slowMs, proxy.label, proxy.group_name
       );
+      const resetId = getLastWindowResetId(proxy.id);
       if (await sendMessage(msg)) {
-        // /del или /pause во время отправки: на удалённую FK не даст записать, паузнутую закрываем сразу
+        // /del или /pause во время отправки: на удалённую FK не даст записать, паузнутую закрываем сразу.
+        // /edit или /pause+/resume (новый window_reset): оценка относилась к прежнему окну — состояние не пишем.
         const after = getProxyById(proxy.id);
-        if (after) {
+        if (after && getLastWindowResetId(proxy.id) === resetId) {
           saveAlert(proxy.id, "degraded");
           if (!after.enabled) closeDegraded(proxy.id);
         }

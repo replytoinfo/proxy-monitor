@@ -409,6 +409,32 @@ describe("команды бота", () => {
     expect(lastState(id)).toBeUndefined();
   });
 
+  it("/edit во время отправки DEGRADED: состояние для нового устройства не пишется", async () => {
+    const id = freshProxy();
+    seed(id, { ok: 8, fail: 6, slow: 5 });
+    fetchMock.mockImplementation(async () => {
+      db.updateProxyEndpoint(id, {
+        host: "new-host.example.com", port: 8080, type: "http", username: null, password: null,
+      });
+      return { ok: true, status: 200, text: async () => "" };
+    });
+    await monitor.runChecks();
+    expect(lastState(id)).toBeUndefined();
+  });
+
+  it("/pause + /resume во время отправки DEGRADED: состояние не пишется", async () => {
+    const id = freshProxy();
+    seed(id, { ok: 8, fail: 6, slow: 5 });
+    fetchMock.mockImplementation(async () => {
+      db.toggleProxy(id, false);
+      db.saveAlert(id, "window_reset"); // как в /pause
+      db.toggleProxy(id, true);
+      return { ok: true, status: 200, text: async () => "" };
+    });
+    await monitor.runChecks();
+    expect(lastState(id)).toBeUndefined();
+  });
+
   it("/qreset состояния деградации не трогает и окно не сдвигает", async () => {
     const open = freshProxy("OPEN");
     alertAt(open, "degraded", 20);
