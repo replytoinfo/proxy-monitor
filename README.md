@@ -9,6 +9,7 @@ Monitoring for HTTP and SOCKS5 proxies, managed and alerted through Telegram. Ru
 - **Checks liveness.** Opens a real connection through the proxy and issues a `HEAD` request. A handshake proves nothing: a proxy that accepts your login but won't pass traffic must count as dead.
 - **Confirms failure with a backup target.** A proxy is marked `down` only after both the primary and the fallback address fail. The defaults are Cloudflare and Google, so a simultaneous outage is unlikely. The fallback check runs only after the primary fails, which keeps healthy proxies free of extra traffic.
 - **Watches IP rotation.** For mobile proxies: if the external IP hasn't changed within `ROTATION_MAX_AGE`, an alert goes out. Several echo services are tried in order until one answers.
+- **Catches degradation.** A proxy that still answers but is slow or drops checks never reaches `down`. If 25% or more of the last 20 minutes of checks are failures or take longer than 5 s, a `DEGRADED` alert goes out, with a recovery message once the share falls below 10%. Thresholds are env-tunable (`DEGRADED_*`).
 - **Reports its own failures.** A failed IP probe raises its own alert instead of silence. An external watchdog (healthchecks.io) confirms the process is alive.
 - **Collapses alert storms.** When every proxy goes down at once, one message goes out instead of N.
 

@@ -22,6 +22,7 @@ vi.mock("../config.js", () => ({
     CHECK_URL_FALLBACK: "http://www.gstatic.com/generate_204",
     IP_PROBE_FAIL_THRESHOLD: 3,
     HEALTHCHECK_URL: null,
+    DEGRADED_WINDOW_MIN: 0,
   },
 }));
 

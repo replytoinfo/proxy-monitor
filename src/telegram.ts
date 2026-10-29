@@ -9,6 +9,9 @@ import {
   setGroup,
   getLastCheck,
   getConsecutiveFailCount,
+  getLastAlert,
+  saveAlert,
+  closeDegraded,
   getIpState,
   countIpChanges,
   fromSqlTime,
@@ -18,6 +21,7 @@ import {
   type ProxyRow,
 } from "./db.js";
 import { hasStrayCredentialText, parseProxyList, parseProxy } from "./parser.js";
+import type { WindowStats } from "./degraded.js";
 import { forgetProxyState } from "./proxy-state.js";
 import { qualityIcon, formatQualityTail, formatSpanLabel } from "./quality-format.js";
 import { measureSpeed, SPEED_DEADLINE_MS } from "./checker/speed.js";
@@ -153,6 +157,56 @@ export function formatRecoveryAlert(
   ].join("\n");
 }
 
+function formatDurationRu(ms: number): string {
+  const hours = Math.floor(ms / 3_600_000);
+  const mins = Math.floor((ms % 3_600_000) / 60_000);
+  if (hours > 0) return `${hours} ч ${mins} мин`;
+  return `${Math.max(1, mins)} мин`;
+}
+
+function pluralFailures(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${n} отказ`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} отказа`;
+  return `${n} отказов`;
+}
+
+export function formatDegradedAlert(
+  host: string,
+  port: number,
+  type: string,
+  stats: WindowStats,
+  windowMin: number,
+  slowMs: number,
+  label?: string | null,
+  groupName?: string | null
+): string {
+  const share = Math.round((stats.bad / stats.total) * 100);
+  const ms = (v: number | null) => (v === null ? "—" : `${v} мс`);
+  return [
+    `\u{1F7E0} <b>Прокси деградирует</b>`,
+    ...formatProxyLine(host, port, type, label, groupName),
+    `Плохих проверок за ${windowMin} мин: ${stats.bad} из ${stats.total} (${share}%) — ${pluralFailures(stats.failed)}, ${stats.slow} медленнее ${slowMs / 1000} с`,
+    `Отклик успешных: медиана ${ms(stats.medianMs)}, p90 ${ms(stats.p90Ms)}`,
+  ].join("\n");
+}
+
+export function formatDegradedRecoveryAlert(
+  host: string,
+  port: number,
+  type: string,
+  durationMs: number,
+  label?: string | null,
+  groupName?: string | null
+): string {
+  return [
+    `\u{1F7E2} <b>Деградация прошла</b>`,
+    ...formatProxyLine(host, port, type, label, groupName),
+    `Деградация длилась ${formatDurationRu(durationMs)}`,
+  ].join("\n");
+}
+
 export function formatStaleIpAlert(
   host: string,
   port: number,
@@ -261,8 +315,10 @@ function formatProxyStatus(p: ProxyRow, quality?: number): string {
     statusIcon = "\u{1F534}";
     statusText = "DOWN";
   } else if (lastCheck.status === "up") {
-    statusIcon = "\u{1F7E2}";
-    statusText = `UP ${lastCheck.response_time}ms`;
+    const degraded =
+      config.DEGRADED_WINDOW_MIN > 0 && getLastAlert(p.id, "degraded")?.type === "degraded";
+    statusIcon = degraded ? "\u{1F7E0}" : "\u{1F7E2}";
+    statusText = `${degraded ? "DEGRADED · " : ""}UP ${lastCheck.response_time}ms`;
   } else {
     statusIcon = "\u{1F7E1}";
     statusText = `fail (${failCount}/${config.FAIL_THRESHOLD})`;
@@ -692,6 +748,8 @@ export async function handleCommand(
       return;
     }
     toggleProxy(id, false);
+    closeDegraded(id);
+    saveAlert(id, "window_reset"); // проверки до паузы не должны давать DEGRADED сразу после /resume
     await sendMessage(`\u{23F8} Прокси #${id} приостановлен`, chatId);
     return;
   }

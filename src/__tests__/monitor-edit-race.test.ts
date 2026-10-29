@@ -30,6 +30,7 @@ vi.mock("../config.js", () => ({
     CHECK_URL_FALLBACK: null,
     IP_PROBE_FAIL_THRESHOLD: 3,
     HEALTHCHECK_URL: null,
+    DEGRADED_WINDOW_MIN: 0,
     CHECKS_RETENTION_HOURS: 168,
     SPEED_URL: "http://speed.cloudflare.com/__down?bytes=1048576",
   },

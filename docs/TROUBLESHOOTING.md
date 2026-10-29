@@ -85,6 +85,20 @@
 4. `Socks5 Authentication failed` — неверный логин или пароль. Первым делом проверить длину пароля против соседних рабочих прокси того же провайдера: у одного провайдера она обычно одинаковая. Расхождение означает прилипший хвост — метка локации вида ` [DE1]`, скопированная из панели вместе с паролем. С версии 1.2.1 `/add` предупреждает об этом сразу; записи, заведённые раньше, надо проверить вручную. Лечится `/del <id>` и повторным `/add` с чистой строкой.
 5. Если провален только основной адрес, а прокси живая — в логе будет `[monitor] primary check URL failing, fallback in use`. Сменить `CHECK_URL`.
 
+## Алерт DEGRADED: слишком частый или не приходит
+
+**Симптом:** «Прокси деградирует» приходит на прокси, которая в целом работает, либо не приходит, а клиентский софт жалуется на таймауты.
+
+**Как устроено:** за последние `DEGRADED_WINDOW_MIN` (20) минут не менее `DEGRADED_MIN_CHECKS` (14) проверок, и доля плохих (отказ или успех дольше `DEGRADED_SLOW_MS`, 5 с) `>= DEGRADED_RATIO` (0.25). Снимается при доле `< DEGRADED_RECOVER_RATIO` (0.1). Состояние — последняя запись `degraded`/`degraded_recovery` в `alerts`.
+
+**Проверить:**
+1. Окно прямо сейчас: `sqlite3 data/proxy-monitor.db "SELECT status, response_time, checked_at FROM checks WHERE proxy_id = <id> AND checked_at > datetime('now','-20 minutes') ORDER BY checked_at"`.
+2. Состояние: `sqlite3 data/proxy-monitor.db "SELECT type, sent_at FROM alerts WHERE proxy_id = <id> ORDER BY id DESC LIMIT 10"`.
+3. Не приходит вообще: при `CHECK_INTERVAL` больше `DEGRADED_WINDOW_MIN*60000/DEGRADED_MIN_CHECKS` (~85 с при дефолтах) в окне меньше `DEGRADED_MIN_CHECKS` проверок — в логе при старте будет предупреждение. Также окно считается не раньше последнего `recovery`/`/edit`, `mass_down` и активного `DOWN` деградацию подавляют.
+4. Слишком часто: поднять `DEGRADED_RATIO` или `DEGRADED_SLOW_MS`. Выключить: `DEGRADED_WINDOW_MIN=0`.
+5. «Деградация прошла» не приходит: нужно `DEGRADED_MIN_CHECKS` проверок после последнего `recovery` и доля `< 0.1`; между 0.1 и 0.25 состояние держится намеренно (гистерезис).
+6. Деградация «застряла» (в `/list` вечный `DEGRADED`): после выключения фичи (`DEGRADED_WINDOW_MIN=0`) метка в `/list` скрыта, а запись в `alerts` остаётся; если прокси часто проходит DOWN→RECOVERED, каждое `recovery` сдвигает начало окна и `DEGRADED_MIN_CHECKS` проверок не набирается. Закрыть вручную: `/pause <id>` и `/resume <id>`.
+
 ## Пришёл алерт про массовое падение
 
 **Симптом:** одно сообщение «All proxies DOWN» вместо алертов по каждой прокси.

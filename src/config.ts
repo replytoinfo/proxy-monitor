@@ -16,6 +16,14 @@ function envInt(name: string, fallback: number, min?: number): number {
   return val;
 }
 
+function envFloat(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const val = parseFloat(raw);
+  if (isNaN(val)) return fallback;
+  return Math.min(max, Math.max(min, val));
+}
+
 function envBool(name: string, fallback: boolean): boolean {
   const raw = process.env[name]?.toLowerCase();
   if (!raw) return fallback;
@@ -51,6 +59,20 @@ export function resolveRotationMaxAge(maxAge: number, checkInterval: number): nu
     return floor;
   }
   return maxAge;
+}
+
+/**
+ * Порог выхода из деградации не может быть выше порога входа: иначе гистерезис
+ * вывернется и алерты начнут мигать. Выход поднимается не выше входа.
+ */
+export function resolveDegradedRecoverRatio(ratio: number, recoverRatio: number): number {
+  if (recoverRatio > ratio) {
+    console.warn(
+      `[config] DEGRADED_RECOVER_RATIO=${recoverRatio} is above DEGRADED_RATIO=${ratio} — lowered to ${ratio}`
+    );
+    return ratio;
+  }
+  return recoverRatio;
 }
 
 /** Проверяемые адреса — только http:, поддержка https: в проверках не входит в объём. */
@@ -138,6 +160,7 @@ function optionalWatchdogUrl(raw: string | undefined): string | null {
 }
 
 const CHECK_INTERVAL = envInt("CHECK_INTERVAL", 45_000, 5_000);
+const DEGRADED_RATIO = envFloat("DEGRADED_RATIO", 0.25, 0.01, 1);
 const IP_CHECK_INTERVAL = resolveIpCheckInterval(envInt("IP_CHECK_INTERVAL", 300_000, 60_000), CHECK_INTERVAL);
 
 export const config = {
@@ -171,4 +194,19 @@ export const config = {
   IP_PROBE_FAIL_THRESHOLD: envInt("IP_PROBE_FAIL_THRESHOLD", 3, 1),
   SPEED_URL: resolveSpeedUrl(process.env.SPEED_URL),
   HEALTHCHECK_URL: optionalWatchdogUrl(process.env.HEALTHCHECK_URL),
+
+  // Алерт деградации (бэктест на проде за 7 суток, docs/CHANGELOG.md 1.10.0).
+  /** Окно оценки, минут; 0 — выключить алерт деградации. */
+  DEGRADED_WINDOW_MIN: envInt("DEGRADED_WINDOW_MIN", 20, 0),
+  /** Успех медленнее этого порога (мс) считается плохой проверкой. */
+  DEGRADED_SLOW_MS: envInt("DEGRADED_SLOW_MS", 5_000, 1),
+  /** Минимум проверок в окне для вердикта. */
+  DEGRADED_MIN_CHECKS: envInt("DEGRADED_MIN_CHECKS", 14, 1),
+  /** Доля плохих проверок, с которой начинается деградация. */
+  DEGRADED_RATIO,
+  /** Доля плохих проверок, ниже которой деградация считается прошедшей. */
+  DEGRADED_RECOVER_RATIO: resolveDegradedRecoverRatio(
+    DEGRADED_RATIO,
+    envFloat("DEGRADED_RECOVER_RATIO", 0.1, 0.001, 1)
+  ),
 } as const;

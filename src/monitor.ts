@@ -8,6 +8,8 @@ import {
   saveAlert,
   deleteOldChecks,
   getLastCheck,
+  getDegradedWindow,
+  closeDegraded,
   getIpState,
   upsertIpState,
   saveIpChangeAndState,
@@ -29,6 +31,8 @@ import {
   formatDownAlert,
   formatReminderAlert,
   formatRecoveryAlert,
+  formatDegradedAlert,
+  formatDegradedRecoveryAlert,
   formatStaleIpAlert,
   formatRotationOkAlert,
   formatIpProbeDownAlert,
@@ -39,6 +43,7 @@ import {
   formatIpProbeSystemOkAlert,
 } from "./telegram.js";
 import { fetchExternalIp } from "./checker/ip.js";
+import { summarizeWindow, evaluateDegraded } from "./degraded.js";
 import { nextIpState, isRotationStale, nextProbeFailure } from "./rotation.js";
 import { pingWatchdog } from "./watchdog.js";
 import { writeStats } from "./stats-export.js";
@@ -133,6 +138,74 @@ async function handleMassOutage(
   }
 
   return false;
+}
+
+/**
+ * Деградация: доля плохих проверок за окно (отказ или успех медленнее порога).
+ * Состояние выводится из alerts (последняя запись degraded/degraded_recovery),
+ * поэтому переживает рестарт и не даёт повторного алерта.
+ *
+ * Активный DOWN важнее: пока он не закрыт RECOVERED, деградация не оценивается.
+ * Окно начинается не раньше последнего recovery/window_reset (см. getDegradedWindow)
+ * и не раньше последнего mass-алерта: проверки во время сбоя самого монитора
+ * не вина прокси. Деградация, пережившая DOWN→RECOVERED, остаётся открытой —
+ * повторного DEGRADED нет, закрывается обычным восстановлением по гистерезису.
+ */
+async function handleDegradation(checked: Array<{ proxy: ProxyRow }>): Promise<void> {
+  if (config.DEGRADED_WINDOW_MIN <= 0) return;
+
+  const mass = getLastSystemAlert("mass");
+  if (mass?.type === "mass_down") return;
+
+  const now = Date.now();
+  let since = toSqlTime(now - config.DEGRADED_WINDOW_MIN * 60_000);
+  if (mass && mass.sent_at > since) since = mass.sent_at;
+
+  const params = {
+    slowMs: config.DEGRADED_SLOW_MS,
+    minChecks: config.DEGRADED_MIN_CHECKS,
+    ratio: config.DEGRADED_RATIO,
+    recoverRatio: config.DEGRADED_RECOVER_RATIO,
+  };
+
+  for (const { proxy: evaluated } of checked) {
+    // /pause и /del могли прийти, пока шёл цикл: паузнутые и удалённые не оцениваем
+    const proxy = getProxyById(evaluated.id);
+    if (!proxy?.enabled) continue;
+    if (getLastAlert(proxy.id, "uptime")?.type === "down") continue;
+
+    const last = getLastAlert(proxy.id, "degraded");
+    const degraded = last?.type === "degraded";
+    const stats = summarizeWindow(getDegradedWindow(proxy.id, since), params.slowMs);
+    const verdict = evaluateDegraded(stats, degraded, params);
+
+    if (verdict === "degrade") {
+      console.log(
+        `[monitor] Proxy ${proxy.host}:${proxy.port} DEGRADED — ${stats.bad}/${stats.total} bad checks`
+      );
+      const msg = formatDegradedAlert(
+        proxy.host, proxy.port, proxy.type, stats,
+        config.DEGRADED_WINDOW_MIN, params.slowMs, proxy.label, proxy.group_name
+      );
+      if (await sendMessage(msg)) {
+        // /del или /pause во время отправки: на удалённую FK не даст записать, паузнутую закрываем сразу
+        const after = getProxyById(proxy.id);
+        if (after) {
+          saveAlert(proxy.id, "degraded");
+          if (!after.enabled) closeDegraded(proxy.id);
+        }
+      }
+    } else if (verdict === "recover" && last) {
+      const durationMs = now - fromSqlTime(last.sent_at);
+      console.log(
+        `[monitor] Proxy ${proxy.host}:${proxy.port} degradation over after ${Math.round(durationMs / 60_000)}m`
+      );
+      const msg = formatDegradedRecoveryAlert(
+        proxy.host, proxy.port, proxy.type, durationMs, proxy.label, proxy.group_name
+      );
+      if (await sendMessage(msg) && getProxyById(proxy.id)) saveAlert(proxy.id, "degraded_recovery");
+    }
+  }
 }
 
 export async function runChecks() {
@@ -231,6 +304,15 @@ export async function runChecks() {
           }
         }
         downSince.delete(proxy.id);
+      }
+    }
+
+    // Побочная функция: её сбой не должен срывать пинг watchdog.
+    if (!suppressDown) {
+      try {
+        await handleDegradation(checked);
+      } catch (err) {
+        console.error("[monitor] Degradation check error:", err instanceof Error ? err.message : err);
       }
     }
 
@@ -493,6 +575,19 @@ export function startMonitor() {
   console.log(
     `[monitor] Starting — interval: ${config.CHECK_INTERVAL}ms, threshold: ${config.FAIL_THRESHOLD} fails, concurrency: ${config.MAX_CONCURRENT_CHECKS}`
   );
+  if (config.DEGRADED_WINDOW_MIN > 0) {
+    const perWindow = Math.floor((config.DEGRADED_WINDOW_MIN * 60_000) / config.CHECK_INTERVAL);
+    console.log(
+      `[monitor] Degradation alerts — window ${config.DEGRADED_WINDOW_MIN}m (~${perWindow} checks), slow >${config.DEGRADED_SLOW_MS}ms, ratio ${config.DEGRADED_RATIO}/${config.DEGRADED_RECOVER_RATIO}`
+    );
+    if (perWindow < config.DEGRADED_MIN_CHECKS) {
+      console.warn(
+        `[monitor] DEGRADED_WINDOW_MIN fits ~${perWindow} checks, below DEGRADED_MIN_CHECKS=${config.DEGRADED_MIN_CHECKS} — degradation alerts will never fire`
+      );
+    }
+  } else {
+    console.log("[monitor] Degradation alerts disabled (DEGRADED_WINDOW_MIN=0)");
+  }
   console.log(
     config.HEALTHCHECK_URL
       ? "[monitor] External watchdog enabled"

@@ -326,6 +326,9 @@ const txnUpdateEndpoint = db.transaction(
     if (lastUptime?.type === "down") {
       stmtInsertRecoveryMarker.run(id);
     }
+    // Новое устройство — окно деградации начинается заново, старые проверки не в счёт.
+    saveAlert(id, "window_reset");
+    closeDegraded(id);
   }
 );
 
@@ -690,9 +693,19 @@ const stmtLastProbeAlert = db.prepare(
    ORDER BY sent_at DESC, id DESC LIMIT 1`
 );
 
+// Деградация: состояние «в деградации» = последняя запись degraded/degraded_recovery.
+// Рестарт его не теряет, in-memory копии нет.
+const stmtLastDegradedAlert = db.prepare(
+  `SELECT * FROM alerts WHERE proxy_id = ? AND type IN ('degraded', 'degraded_recovery')
+   ORDER BY sent_at DESC, id DESC LIMIT 1`
+);
+
 export type AlertType =
   | "down"
   | "recovery"
+  | "degraded"
+  | "degraded_recovery"
+  | "window_reset"
   | "stale_ip"
   | "rotation_ok"
   | "ip_probe_down"
@@ -704,15 +717,48 @@ export function saveAlert(proxyId: number, type: AlertType) {
 
 export function getLastAlert(
   proxyId: number,
-  kind: "uptime" | "rotation" | "probe"
+  kind: "uptime" | "rotation" | "probe" | "degraded"
 ): AlertRow | undefined {
   const stmt =
     kind === "uptime"
       ? stmtLastUptimeAlert
       : kind === "rotation"
         ? stmtLastRotationAlert
-        : stmtLastProbeAlert;
+        : kind === "probe"
+          ? stmtLastProbeAlert
+          : stmtLastDegradedAlert;
   return stmt.get(proxyId) as AlertRow | undefined;
+}
+
+/**
+ * Молча закрывает деградацию (без сообщения): /edit и /pause — прежняя
+ * деградация к новому устройству или к паузе отношения не имеет.
+ * Возвращает true, если деградация была открыта.
+ */
+export function closeDegraded(proxyId: number): boolean {
+  if (getLastAlert(proxyId, "degraded")?.type !== "degraded") return false;
+  saveAlert(proxyId, "degraded_recovery");
+  return true;
+}
+
+// Проверки окна деградации. Нижняя граница — не раньше последнего recovery
+// (хвост DOWN-эпизода не должен давать деградацию свежевосстановленной прокси)
+// и window_reset (/edit: проверки старого устройства). since — UTC "YYYY-MM-DD HH:MM:SS".
+const stmtDegradedWindow = db.prepare(
+  `SELECT status, response_time FROM checks
+   WHERE proxy_id = @id
+     AND checked_at > MAX(@since, COALESCE(
+       (SELECT MAX(sent_at) FROM alerts WHERE proxy_id = @id AND type IN ('recovery', 'window_reset')), ''))`
+);
+
+export function getDegradedWindow(
+  proxyId: number,
+  since: string
+): Array<{ status: string; response_time: number | null }> {
+  return stmtDegradedWindow.all({ id: proxyId, since }) as Array<{
+    status: string;
+    response_time: number | null;
+  }>;
 }
 
 // --- System alerts ---
