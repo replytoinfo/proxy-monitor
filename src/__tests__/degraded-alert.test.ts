@@ -486,6 +486,12 @@ describe("команды бота", () => {
     expect(sent().join("\n")).toContain("не найдена");
   });
 
+  it("/resume несуществующего id отвечает «не найдена», а не «возобновлён»", async () => {
+    await telegram.handleCommand(CHAT, "/resume 999999");
+    expect(sent().join("\n")).toContain("не найдена");
+    expect(sent().join("\n")).not.toContain("возобновлён");
+  });
+
   it("/qreset состояния деградации не трогает и окно не сдвигает", async () => {
     const open = freshProxy("OPEN");
     alertAt(open, "degraded", 20);

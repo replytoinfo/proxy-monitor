@@ -764,7 +764,10 @@ export async function handleCommand(
       await sendMessage("Укажи ID: /resume <i>id</i>", chatId);
       return;
     }
-    toggleProxy(id, true);
+    if (!toggleProxy(id, true).changes) {
+      await sendMessage(`Прокси #${id} не найдена.`, chatId);
+      return;
+    }
     await sendMessage(`\u{25B6}\u{FE0F} Прокси #${id} возобновлён`, chatId);
     return;
   }
