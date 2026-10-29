@@ -747,7 +747,10 @@ export async function handleCommand(
       await sendMessage("Укажи ID: /pause <i>id</i>", chatId);
       return;
     }
-    toggleProxy(id, false);
+    if (!toggleProxy(id, false).changes) {
+      await sendMessage(`Прокси #${id} не найдена.`, chatId);
+      return;
+    }
     closeDegraded(id);
     saveAlert(id, "window_reset"); // проверки до паузы не должны давать DEGRADED сразу после /resume
     await sendMessage(`\u{23F8} Прокси #${id} приостановлен`, chatId);

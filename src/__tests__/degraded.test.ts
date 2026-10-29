@@ -23,7 +23,7 @@ describe("summarizeWindow", () => {
     expect(summarizeWindow([up(5001)], 5000).slow).toBe(1);
   });
 
-  it("успех через fallback с суммарным откликом выше порога — плохая проверка", () => {
+  it("успех с откликом выше порога (суммарное время fallback) — плохая проверка", () => {
     // checkWithFallback суммирует время обеих попыток: 10 с таймаута + быстрый запасной
     expect(summarizeWindow([up(10_300)], 5000).bad).toBe(1);
   });
@@ -84,6 +84,7 @@ describe("evaluateDegraded", () => {
 describe("resolveDegradedRecoverRatio", () => {
   beforeEach(() => {
     vi.resetModules();
+    for (const k of Object.keys(process.env)) if (k.startsWith("DEGRADED_")) delete process.env[k];
     process.env.TELEGRAM_BOT_TOKEN = "test";
     process.env.TELEGRAM_CHAT_ID = "12345";
     process.env.ENCRYPTION_KEY = "a".repeat(64);

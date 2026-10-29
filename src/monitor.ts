@@ -206,7 +206,11 @@ async function handleDegradation(checked: Array<{ proxy: ProxyRow }>): Promise<v
       const msg = formatDegradedRecoveryAlert(
         proxy.host, proxy.port, proxy.type, durationMs, proxy.label, proxy.group_name
       );
-      if (await sendMessage(msg) && getProxyById(proxy.id)) saveAlert(proxy.id, "degraded_recovery");
+      const resetId = getLastWindowResetId(proxy.id);
+      // /edit или /pause во время отправки уже закрыли деградацию и сбросили окно — второй маркер не пишем
+      if (await sendMessage(msg) && getProxyById(proxy.id) && getLastWindowResetId(proxy.id) === resetId) {
+        saveAlert(proxy.id, "degraded_recovery");
+      }
     }
   }
 }

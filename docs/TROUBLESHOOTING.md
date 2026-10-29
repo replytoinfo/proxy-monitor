@@ -92,12 +92,12 @@
 **Как устроено:** за последние `DEGRADED_WINDOW_MIN` (20) минут не менее `DEGRADED_MIN_CHECKS` (14) проверок, и доля плохих (отказ или успех дольше `DEGRADED_SLOW_MS`, 5 с) `>= DEGRADED_RATIO` (0.25). Снимается при доле `< DEGRADED_RECOVER_RATIO` (0.1). Состояние — последняя запись `degraded`/`degraded_recovery` в `alerts`.
 
 **Проверить:**
-1. Окно прямо сейчас: `sqlite3 data/proxy-monitor.db "SELECT status, response_time, checked_at FROM checks WHERE proxy_id = <id> AND checked_at > datetime('now','-20 minutes') ORDER BY checked_at"`.
+1. Окно прямо сейчас (без сдвига начала по последнему `recovery`/`window_reset`/`mass_recovery`, см. пункт 3): `sqlite3 data/proxy-monitor.db "SELECT status, response_time, checked_at FROM checks WHERE proxy_id = <id> AND checked_at > datetime('now','-20 minutes') ORDER BY checked_at"`.
 2. Состояние: `sqlite3 data/proxy-monitor.db "SELECT type, sent_at FROM alerts WHERE proxy_id = <id> ORDER BY id DESC LIMIT 10"`.
-3. Не приходит вообще: при `CHECK_INTERVAL` больше `DEGRADED_WINDOW_MIN*60000/DEGRADED_MIN_CHECKS` (~85 с при дефолтах) в окне меньше `DEGRADED_MIN_CHECKS` проверок — в логе при старте будет предупреждение. Также окно считается не раньше последнего `recovery`/`/edit`, `mass_down` и активного `DOWN` деградацию подавляют.
+3. Не приходит вообще: при `CHECK_INTERVAL` больше `DEGRADED_WINDOW_MIN*60000/DEGRADED_MIN_CHECKS` (~85 с при дефолтах) в окне меньше `DEGRADED_MIN_CHECKS` проверок — в логе при старте будет предупреждение. Также деградацию подавляют `mass_down` и активный `DOWN`, а начало окна сдвигают последний `recovery`, `/edit` и `/pause` (`window_reset`) и `mass_recovery`.
 4. Слишком часто: поднять `DEGRADED_RATIO` или `DEGRADED_SLOW_MS`. Выключить: `DEGRADED_WINDOW_MIN=0`.
-5. «Деградация прошла» не приходит: нужно `DEGRADED_MIN_CHECKS` проверок после последнего `recovery` и доля `< 0.1`; между 0.1 и 0.25 состояние держится намеренно (гистерезис).
-6. Деградация «застряла» (в `/list` вечный `DEGRADED`): после выключения фичи (`DEGRADED_WINDOW_MIN=0`) метка в `/list` скрыта, а запись в `alerts` остаётся; если прокси часто проходит DOWN→RECOVERED, каждое `recovery` сдвигает начало окна и `DEGRADED_MIN_CHECKS` проверок не набирается. Закрыть вручную: `/pause <id>` и `/resume <id>`.
+5. «Деградация прошла» не приходит: нужно `DEGRADED_MIN_CHECKS` проверок после последнего `recovery`/`window_reset` (`/edit`, `/pause`) и доля `< DEGRADED_RECOVER_RATIO` (0.1); между 0.1 и 0.25 состояние держится намеренно (гистерезис).
+6. Деградация «застряла» (в `/list` вечный `DEGRADED`): после выключения фичи (`DEGRADED_WINDOW_MIN=0`) метка в `/list` скрыта, а запись в `alerts` остаётся; если прокси часто проходит DOWN→RECOVERED, каждое `recovery` сдвигает начало окна и `DEGRADED_MIN_CHECKS` проверок не набирается. Закрыть вручную: `/pause <id>` и `/resume <id>` (закрытие молчаливое, без сообщения; окно оценки начнётся заново).
 
 ## Пришёл алерт про массовое падение
 

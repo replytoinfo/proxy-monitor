@@ -127,6 +127,10 @@ const sent = () =>
   fetchMock.mock.calls.map(([, init]) => JSON.parse((init as { body: string }).body).text as string);
 const degradedMsgs = () => sent().filter((t) => t.includes("Прокси деградирует"));
 const recoveredMsgs = () => sent().filter((t) => t.includes("Деградация прошла"));
+const recoveryRows = (id: number) =>
+  (db.default
+    .prepare("SELECT COUNT(*) AS n FROM alerts WHERE proxy_id = ? AND type = 'degraded_recovery'")
+    .get(id) as { n: number }).n;
 const lastState = (id: number) => db.getLastAlert(id, "degraded")?.type;
 
 const CHAT = "12345";
@@ -136,8 +140,7 @@ const CHAT = "12345";
 describe("срабатывание", () => {
   it("меньше 10 проверок в окне — молчит, даже если все плохие", async () => {
     const id = freshProxy();
-    seed(id, { fail: 8 }); // + 1 проверка цикла = 9
-    cycleResult({ ok: false, ms: 10_000 });
+    seed(id, { slow: 8 }); // + 1 проверка цикла = 9; медленные — это up, цепочка DOWN не копится
     await monitor.runChecks();
     expect(degradedMsgs()).toHaveLength(0);
   });
@@ -169,7 +172,7 @@ describe("срабатывание", () => {
     expect(msg).toMatch(/медиана \d+ мс, p90 \d+ мс/);
   });
 
-  it("успех через fallback с откликом выше порога — плохая проверка", async () => {
+  it("медленный успех (отклик выше порога) — плохая проверка", async () => {
     const id = freshProxy();
     seed(id, { ok: 13, slow: 6 }); // «slow» = up с откликом 7000, как успех после таймаута основного
     await monitor.runChecks();
@@ -344,10 +347,11 @@ describe("команды бота", () => {
     const id = freshProxy();
     seed(id, { ok: 8, fail: 6, slow: 5 });
     alertAt(id, "degraded", 20);
+    alertAt(id, "down", 25);
 
     await telegram.handleCommand(CHAT, `/edit ${id}\nnew-host.example.com:8080`);
     expect(lastState(id)).toBe("degraded_recovery");
-    expect(db.getLastAlert(id, "uptime")).toBeUndefined();
+    expect(db.getLastAlert(id, "uptime")?.type).toBe("recovery"); // маркер вместо ложного RECOVERED
     fetchMock.mockClear();
 
     await monitor.runChecks();
@@ -433,6 +437,53 @@ describe("команды бота", () => {
     });
     await monitor.runChecks();
     expect(lastState(id)).toBeUndefined();
+  });
+
+  it("/edit во время отправки «Деградация прошла»: degraded_recovery не дублируется", async () => {
+    const id = freshProxy();
+    alertAt(id, "degraded", 65);
+    seed(id, { ok: 18 });
+    fetchMock.mockImplementation(async () => {
+      db.updateProxyEndpoint(id, {
+        host: "new-host.example.com", port: 8080, type: "http", username: null, password: null,
+      });
+      return { ok: true, status: 200, text: async () => "" };
+    });
+    await monitor.runChecks();
+    expect(recoveryRows(id)).toBe(1); // одна — от /edit
+  });
+
+  it("/pause + /resume во время отправки «Деградация прошла»: degraded_recovery не дублируется", async () => {
+    const id = freshProxy();
+    alertAt(id, "degraded", 65);
+    seed(id, { ok: 18 });
+    fetchMock.mockImplementation(async () => {
+      db.toggleProxy(id, false);
+      db.closeDegraded(id); // как в /pause
+      db.saveAlert(id, "window_reset");
+      db.toggleProxy(id, true);
+      return { ok: true, status: 200, text: async () => "" };
+    });
+    await monitor.runChecks();
+    expect(recoveryRows(id)).toBe(1);
+  });
+
+  it("неудачная отправка «Деградация прошла» не закрывает деградацию — следующий цикл повторит", async () => {
+    const id = freshProxy();
+    alertAt(id, "degraded", 65);
+    seed(id, { ok: 18 });
+    fetchMock.mockResolvedValue({ ok: false, status: 400, text: async () => "bad" });
+    await monitor.runChecks();
+    expect(lastState(id)).toBe("degraded");
+
+    fetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => "" });
+    await monitor.runChecks();
+    expect(lastState(id)).toBe("degraded_recovery");
+  });
+
+  it("/pause несуществующего id отвечает, а не падает на FK", async () => {
+    await expect(telegram.handleCommand(CHAT, "/pause 999999")).resolves.toBeUndefined();
+    expect(sent().join("\n")).toContain("не найдена");
   });
 
   it("/qreset состояния деградации не трогает и окно не сдвигает", async () => {
